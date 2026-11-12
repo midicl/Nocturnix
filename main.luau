@@ -21,7 +21,7 @@ local jumpUnlockEnabled   = false
 local infiniteJumpEnabled = false
 local hbEnabled           = false
 local hbSize              = 6
-local originalSizes       = {}  -- [part] = original Vector3 size
+local originalSizes       = {}  -- [part] = {size=Vector3, canCollide=bool}
 local spinEnabled         = false
 local spinAngle           = 0
 
@@ -247,9 +247,10 @@ HBToggle.MouseButton1Click:Connect(function()
     HBToggle.BackgroundColor3 = hbEnabled
         and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
     if not hbEnabled then
-        for part, origSize in pairs(originalSizes) do
+        for part, orig in pairs(originalSizes) do
             if part and part.Parent then
-                part.Size = origSize
+                part.Size        = orig.size
+                part.CanCollide  = orig.canCollide
             end
         end
         originalSizes = {}
@@ -440,24 +441,36 @@ RunService.RenderStepped:Connect(function(dt)
 end)
 
 -- ── Heartbeat — HB expander ───────────────────────────────────────────────────
--- Expands all collidable body parts (Head, Torso, limbs) on other players.
--- HumanoidRootPart is intentionally skipped — it has CanCollide=false and
--- is not what the game's explosion radius check hits.
+-- Only active while YOU hold a bomb. Expands enemy body parts (Head, Torso,
+-- limbs) but NOT HumanoidRootPart (CanCollide=false, ignored by explosions).
+-- CanCollide is forced false on expanded parts so giant limbs don't collide
+-- with the environment and freeze everyone.
 RunService.Heartbeat:Connect(function()
     if not hbEnabled then return end
+    local bombInHand = hasBomb()
     local sz = Vector3.new(hbSize, hbSize, hbSize)
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
             for _, part in ipairs(p.Character:GetDescendants()) do
                 if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-                    if not originalSizes[part] then
-                        originalSizes[part] = part.Size
+                    if bombInHand then
+                        if not originalSizes[part] then
+                            originalSizes[part] = {size = part.Size, canCollide = part.CanCollide}
+                        end
+                        part.Size       = sz
+                        part.CanCollide = false
+                    else
+                        local orig = originalSizes[part]
+                        if orig and part.Parent then
+                            part.Size       = orig.size
+                            part.CanCollide = orig.canCollide
+                        end
                     end
-                    part.Size = sz
                 end
             end
         end
     end
+    if not bombInHand then originalSizes = {} end
 end)
 
 switchTab("Regular")
