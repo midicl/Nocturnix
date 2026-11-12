@@ -204,7 +204,7 @@ end)
 
 updateSlider()   -- set initial fill/label (no AbsoluteSize needed with this approach)
 
-RunService.RenderStepped:Connect(function()
+RunService.RenderStepped:Connect(function(dt)
     if not speedEnabled then return end
     if bombPauseEnabled and hasBomb() then return end
 
@@ -217,6 +217,6 @@ RunService.RenderStepped:Connect(function()
 
     local dir = hum.MoveDirection
     if dir.Magnitude > 0 then
-        hrp.CFrame = hrp.CFrame + dir * speedValue
+        hrp.CFrame = hrp.CFrame + dir * speedValue * dt
     end
 end)
