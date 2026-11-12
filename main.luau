@@ -10,10 +10,10 @@ local LocalPlayer      = Players.LocalPlayer
 local BASE_WALKSPEED      = 16
 
 local regularSpeedEnabled = false
-local regularSpeed        = 1.5
+local regularSpeed        = 20
 
 local bombSpeedEnabled    = false
-local bombSpeed           = 1.0
+local bombSpeed           = 10
 
 local ladderCheckEnabled  = true
 local frozenCheckEnabled  = true
@@ -22,8 +22,8 @@ local menuVisible         = true
 local listeningForKey     = false
 local toggleKey           = nil  -- nil = button only
 
-local SLIDER_MIN = 1.0
-local SLIDER_MAX = 5.0
+local SLIDER_MIN = 1
+local SLIDER_MAX = 100
 
 -- ── Helpers ───────────────────────────────────────────────────────────────────
 local function hasBomb()
@@ -143,7 +143,7 @@ end
 
 local function mkSlider(parent, y, initVal, onChange)
     local lbl = Instance.new("TextLabel")
-    lbl.Text                   = string.format("Speed: %.1fx", initVal)
+    lbl.Text                   = string.format("Speed: %d", initVal)
     lbl.TextColor3             = Color3.fromRGB(255, 255, 255)
     lbl.TextSize               = 12
     lbl.Font                   = Enum.Font.Gotham
@@ -182,10 +182,10 @@ local function mkSlider(parent, y, initVal, onChange)
     local sd = false  -- slider dragging
 
     local function update(v)
-        v = math.floor(math.clamp(v, SLIDER_MIN, SLIDER_MAX) * 10 + 0.5) / 10
+        v = math.floor(math.clamp(v, SLIDER_MIN, SLIDER_MAX) + 0.5)
         local pct = (v - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)
         fill.Size = UDim2.new(pct, 0, 1, 0)
-        lbl.Text  = string.format("Speed: %.1fx", v)
+        lbl.Text  = string.format("Speed: %d", v)
         onChange(v)
     end
 
@@ -334,33 +334,27 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
--- ── Heartbeat — WalkSpeed ─────────────────────────────────────────────────────
-RunService.Heartbeat:Connect(function()
+-- ── RenderStepped — CFrame speed ─────────────────────────────────────────────
+RunService.RenderStepped:Connect(function(dt)
     local char = LocalPlayer.Character
     if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
-    if not hum or hum.Health <= 0 then return end
+    if not hrp or not hum or hum.Health <= 0 then return end
 
-    local moving = hum.MoveDirection.Magnitude > 0
+    local dir = hum.MoveDirection
+    if frozenCheckEnabled and dir.Magnitude == 0 then return end
+    if ladderCheckEnabled and isOnLadder(hum) then return end
 
-    if frozenCheckEnabled and not moving then
-        hum.WalkSpeed = BASE_WALKSPEED
-        return
-    end
-
-    if ladderCheckEnabled and isOnLadder(hum) then
-        hum.WalkSpeed = BASE_WALKSPEED
-        return
-    end
-
+    local speed = 0
     if hasBomb() then
-        hum.WalkSpeed = bombSpeedEnabled
-            and BASE_WALKSPEED * bombSpeed
-            or  BASE_WALKSPEED
+        if bombSpeedEnabled then speed = bombSpeed end
     elseif regularSpeedEnabled then
-        hum.WalkSpeed = BASE_WALKSPEED * regularSpeed
-    else
-        hum.WalkSpeed = BASE_WALKSPEED
+        speed = regularSpeed
+    end
+
+    if speed > 0 and dir.Magnitude > 0 then
+        hrp.CFrame = hrp.CFrame + dir * speed * dt
     end
 end)
 
