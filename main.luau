@@ -1,18 +1,16 @@
--- Nocturnix | Speed GUI
+-- Services
+local Players     = game:GetService("Players")
+local RunService  = game:GetService("RunService")
+local UIS         = game:GetService("UserInputService")
+local Lighting    = game:GetService("Lighting")
+local CoreGui     = game:GetService("CoreGui")
+local LP          = Players.LocalPlayer
 
--- ── Services ──────────────────────────────────────────────────────────────────
-local UserInputService = game:GetService("UserInputService")
-local RunService       = game:GetService("RunService")
-local Players          = game:GetService("Players")
-local CoreGui          = game:GetService("CoreGui")
-local LocalPlayer      = Players.LocalPlayer
-local Lighting         = game:GetService("Lighting")
-
--- ── State ─────────────────────────────────────────────────────────────────────
+-- State
 local regularSpeedEnabled = false
 local regularSpeed        = 20
 local bombSpeedEnabled    = false
-local bombSpeed           = 10
+local bombSpeed           = 25
 local spinEnabled         = false
 local spinAngle           = 0
 local ladderCheckEnabled  = true
@@ -20,37 +18,28 @@ local frozenCheckEnabled  = true
 local infiniteJumpEnabled = false
 local noclipEnabled       = false
 
--- ── Helpers ───────────────────────────────────────────────────────────────────
+-- Capture original lighting
+local origLight = {
+    Brightness     = Lighting.Brightness,
+    Ambient        = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    FogEnd         = Lighting.FogEnd,
+    FogColor       = Lighting.FogColor,
+    ClockTime      = Lighting.ClockTime,
+}
+
+-- Helpers
 local function hasBomb()
-    local char = LocalPlayer.Character
+    local char = LP.Character
     if not char then return false end
-    for _, v in ipairs(char:GetChildren()) do
-        if v:IsA("Tool") and string.lower(v.Name):find("bomb") then return true end
-    end
-    return false
+    return char:FindFirstChild("bomb") ~= nil or char:FindFirstChild("Bomb") ~= nil
 end
 
 local function isOnLadder(hum)
     return hum:GetState() == Enum.HumanoidStateType.Climbing
 end
 
--- ── Lighting data ─────────────────────────────────────────────────────────────
-local origLight = {}
-pcall(function()
-    origLight = {
-        Brightness     = Lighting.Brightness,
-        Ambient        = Lighting.Ambient,
-        OutdoorAmbient = Lighting.OutdoorAmbient,
-        FogEnd         = Lighting.FogEnd,
-        FogStart       = Lighting.FogStart,
-        FogColor       = Lighting.FogColor,
-        ClockTime      = Lighting.ClockTime,
-    }
-end)
-for _, v in ipairs(Lighting:GetChildren()) do
-    if v:IsA("PostEffect") then origLight["fx_"..v.Name] = v.Enabled end
-end
-
+-- Lighting presets
 local SCENE_PRESETS = {
     ["Ultra Realism"] = {brightness=3,   ambient={80,80,95},    outdoor={100,100,120}, fog=2000, fogcol={180,190,210}, clock=14},
     ["Golden Valley"] = {brightness=4,   ambient={180,150,80},  outdoor={200,170,90},  fog=3000, fogcol={255,230,150}, clock=17},
@@ -73,107 +62,75 @@ local WEATHER_PRESETS = {
     ["Firefly"]  = {brightness=0.3, ambient={30,50,20},    outdoor={20,40,15},    fog=2000, fogcol={40,60,30},    clock=22},
 }
 
-local function applyLightingPreset(preset)
-    if not preset then return end
-    pcall(function() Lighting.Brightness     = preset.brightness end)
-    pcall(function() Lighting.Ambient        = Color3.fromRGB(table.unpack(preset.ambient)) end)
-    pcall(function() Lighting.OutdoorAmbient = Color3.fromRGB(table.unpack(preset.outdoor)) end)
-    pcall(function() Lighting.FogEnd         = preset.fog end)
-    pcall(function() Lighting.FogColor       = Color3.fromRGB(table.unpack(preset.fogcol)) end)
-    pcall(function() Lighting.ClockTime      = preset.clock end)
+local function applyLightingPreset(p)
+    Lighting.Brightness     = p.brightness
+    Lighting.Ambient        = Color3.fromRGB(unpack(p.ambient))
+    Lighting.OutdoorAmbient = Color3.fromRGB(unpack(p.outdoor))
+    Lighting.FogEnd         = p.fog
+    Lighting.FogColor       = Color3.fromRGB(unpack(p.fogcol))
+    Lighting.ClockTime      = p.clock
 end
 
 local function resetLighting()
-    if not origLight.Brightness then return end
-    pcall(function() Lighting.Brightness     = origLight.Brightness     end)
-    pcall(function() Lighting.Ambient        = origLight.Ambient        end)
-    pcall(function() Lighting.OutdoorAmbient = origLight.OutdoorAmbient end)
-    pcall(function() Lighting.FogEnd         = origLight.FogEnd         end)
-    pcall(function() Lighting.FogStart       = origLight.FogStart       end)
-    pcall(function() Lighting.FogColor       = origLight.FogColor       end)
-    pcall(function() Lighting.ClockTime      = origLight.ClockTime      end)
-    for _, v in ipairs(Lighting:GetChildren()) do
-        local key = "fx_"..v.Name
-        if v:IsA("PostEffect") and origLight[key] ~= nil then
-            pcall(function() v.Enabled = origLight[key] end)
+    Lighting.Brightness     = origLight.Brightness
+    Lighting.Ambient        = origLight.Ambient
+    Lighting.OutdoorAmbient = origLight.OutdoorAmbient
+    Lighting.FogEnd         = origLight.FogEnd
+    Lighting.FogColor       = origLight.FogColor
+    Lighting.ClockTime      = origLight.ClockTime
+end
+
+-- FPS funcs
+local function setNoParticles(v)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Trail")
+        or obj:IsA("Smoke") or obj:IsA("Sparkles") or obj:IsA("Fire") then
+            obj.Enabled = not v
         end
     end
 end
 
--- ── FPS improvements ──────────────────────────────────────────────────────────
-local storedParticles = {}
-local storedLights    = {}
-local storedPostFX    = {}
-local storedMaterials = {}
-
-local function setNoParticles(on)
-    if on then
-        for _, v in ipairs(workspace:GetDescendants()) do
-            if (v:IsA("ParticleEmitter") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles")) and v.Enabled then
-                storedParticles[v] = true; v.Enabled = false
-            end
-        end
-    else
-        for v in pairs(storedParticles) do pcall(function() v.Enabled = true end) end
-        storedParticles = {}
-    end
-end
-
-local function setNoLights(on)
-    if on then
-        for _, v in ipairs(workspace:GetDescendants()) do
-            if v:IsA("PointLight") or v:IsA("SpotLight") or v:IsA("SurfaceLight") then
-                storedLights[v] = v.Brightness; v.Brightness = 0
-            end
-        end
-    else
-        for v, b in pairs(storedLights) do pcall(function() v.Brightness = b end) end
-        storedLights = {}
-    end
-end
-
-local function setNoPostFX(on)
-    for _, v in ipairs(Lighting:GetChildren()) do
-        if v:IsA("PostEffect") then
-            if on then storedPostFX[v] = v.Enabled; v.Enabled = false
-            elseif storedPostFX[v] ~= nil then pcall(function() v.Enabled = storedPostFX[v] end) end
+local function setNoLights(v)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("PointLight") or obj:IsA("SpotLight") or obj:IsA("SurfaceLight") then
+            obj.Enabled = not v
         end
     end
-    if not on then storedPostFX = {} end
 end
 
-local function setPlasticMats(on)
-    if on then
-        for _, v in ipairs(workspace:GetDescendants()) do
-            if v:IsA("BasePart") and v.Material ~= Enum.Material.SmoothPlastic then
-                storedMaterials[v] = v.Material; v.Material = Enum.Material.SmoothPlastic
-            end
+local function setNoPostFX(v)
+    for _, obj in ipairs(Lighting:GetDescendants()) do
+        if obj:IsA("PostEffect") then
+            obj.Enabled = not v
         end
-    else
-        for v, m in pairs(storedMaterials) do pcall(function() v.Material = m end) end
-        storedMaterials = {}
     end
 end
 
-local function setLowGraphics(on)
-    setNoParticles(on); setNoLights(on); setNoPostFX(on); setPlasticMats(on)
+local function setLowGraphics(v)
+    local char = LP.Character
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and not (char and obj:IsDescendantOf(char)) then
+            if v then obj.Material = Enum.Material.Plastic end
+        end
+    end
 end
 
--- ── HUD (always visible, not hidden by Insert) ────────────────────────────────
+-- HUD
 local HudGui = Instance.new("ScreenGui")
-HudGui.Enabled = true
-HudGui.Parent  = CoreGui
+HudGui.Name = "NocturnixHUD"
+HudGui.ResetOnSpawn = false
+HudGui.Parent = CoreGui
 
 local HUDFrame = Instance.new("Frame")
-HUDFrame.Size                   = UDim2.new(0, 110, 0, 10)
-HUDFrame.Position               = UDim2.new(0, 5, 0.5, -40)
-HUDFrame.BackgroundColor3       = Color3.fromRGB(15, 15, 15)
-HUDFrame.BackgroundTransparency = 0.35
-HUDFrame.BorderSizePixel        = 0
-HUDFrame.Parent                 = HudGui
-Instance.new("UICorner", HUDFrame).CornerRadius = UDim.new(0, 6)
+HUDFrame.Size = UDim2.new(0, 110, 0, 10)
+HUDFrame.Position = UDim2.new(0, 5, 0.5, -40)
+HUDFrame.BackgroundTransparency = 1
+HUDFrame.Parent = HudGui
 
-local hudLabels = {}
+local HUDList = Instance.new("UIListLayout")
+HUDList.SortOrder = Enum.SortOrder.LayoutOrder
+HUDList.Padding = UDim.new(0, 2)
+HUDList.Parent = HUDFrame
 
 local HUD_FEATURES = {
     {k="regularSpeed", l="Speed"},
@@ -183,298 +140,171 @@ local HUD_FEATURES = {
     {k="noclip",       l="Noclip"},
 }
 
-local function getEnabled(k)
-    if k=="regularSpeed"  then return regularSpeedEnabled  end
-    if k=="bombSpeed"     then return bombSpeedEnabled     end
-    if k=="spinBot"       then return spinEnabled          end
-    if k=="infiniteJump"  then return infiniteJumpEnabled  end
-    if k=="noclip"        then return noclipEnabled        end
-    return false
+local hudLabels = {}
+for i, feat in ipairs(HUD_FEATURES) do
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0, 110, 0, 14)
+    lbl.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    lbl.BackgroundTransparency = 0.3
+    lbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 10
+    lbl.Text = feat.l .. ": OFF"
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.LayoutOrder = i
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft = UDim.new(0, 4)
+    pad.Parent = lbl
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 2)
+    corner.Parent = lbl
+    lbl.Parent = HUDFrame
+    hudLabels[feat.k] = lbl
 end
+
+local HUD_LABEL_MAP = {
+    regularSpeed = "Speed",
+    bombSpeed    = "Bomb Spd",
+    spinBot      = "Spin Bot",
+    infiniteJump = "Inf Jump",
+    noclip       = "Noclip",
+}
 
 local function updateHUD()
-    for i, feat in ipairs(HUD_FEATURES) do
-        if not hudLabels[i] then
-            local l = Instance.new("TextLabel")
-            l.TextSize               = 11
-            l.Font                   = Enum.Font.Gotham
-            l.BackgroundTransparency = 1
-            l.BorderSizePixel        = 0
-            l.Size                   = UDim2.new(1, -8, 0, 15)
-            l.Position               = UDim2.new(0, 4, 0, 4 + (i-1)*16)
-            l.TextXAlignment         = Enum.TextXAlignment.Left
-            l.Parent                 = HUDFrame
-            hudLabels[i] = l
-        end
-        local enabled = getEnabled(feat.k)
-        hudLabels[i].Text       = feat.l .. ": " .. (enabled and "ON" or "OFF")
-        hudLabels[i].TextColor3 = enabled and Color3.fromRGB(100, 255, 120) or Color3.fromRGB(160, 160, 160)
+    local states = {
+        regularSpeed = regularSpeedEnabled,
+        bombSpeed    = bombSpeedEnabled,
+        spinBot      = spinEnabled,
+        infiniteJump = infiniteJumpEnabled,
+        noclip       = noclipEnabled,
+    }
+    for k, lbl in pairs(hudLabels) do
+        local on = states[k]
+        lbl.Text = HUD_LABEL_MAP[k] .. ": " .. (on and "ON" or "OFF")
+        lbl.TextColor3 = on
+            and Color3.fromRGB(100, 220, 100)
+            or  Color3.fromRGB(180, 180, 180)
     end
-    HUDFrame.Size = UDim2.new(0, 110, 0, 8 + #HUD_FEATURES * 16)
 end
 
-updateHUD()
+-- Load Orion
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/OrionLibrary/Orion/main/source"))()
+local Window = OrionLib:CreateOrion("Nocturnix")
 
--- ── Load UI Library ───────────────────────────────────────────────────────────
-local function safeloadstring(url)
-    local ok, code = pcall(game.HttpGet, game, url)
-    if not ok then warn("HttpGet failed: " .. tostring(code)); return nil end
-    local fn, err = loadstring(code)
-    if not fn then warn("loadstring failed: " .. tostring(err)); return nil end
-    return fn()
-end
+-- Speed tab
+local SpeedTab = Window:CreateSection("Speed")
 
-local UILibrary = safeloadstring("https://raw.githubusercontent.com/SugaBlaz/UI-Library/refs/heads/main/Orbital%20UI.lua")
-if not UILibrary then return end
+SpeedTab:Toggle("Speed", function(v)
+    regularSpeedEnabled = v
+    updateHUD()
+end)
 
-local ui = UILibrary.Main.new({
-    TitleText         = "Nocturnix",
-    Size              = UDim2.new(0, 220, 0, 420),
-    Position          = UDim2.new(0.5, -110, 0.4, -210),
-    SettingSize       = UDim2.new(0, 220, 0, 250),
-    TitleHeight       = 30,
-    CornerRadius      = 6,
-    ElementPadding    = 5,
-    Font              = Enum.Font.GothamBold,
-    TextSize          = 12,
-    SectionHeight     = 20,
-    UIStrokeThickness = 1,
-    SliderColor       = Color3.fromRGB(54, 54, 54),
-    NotifcationSound  = "rbxassetid://80833448337193",
-    ResetOnSpawn      = false,
-    Addons            = {},
-    KeySystemEnabled  = false,
-    TabPadding        = 10,
-    UseOwnTheme       = false,
-    Theme             = "Midnight",
-    SaveOnExit        = true,
-})
+SpeedTab:Slider("Speed Value", 10, 200, function(v)
+    regularSpeed = v
+end)
 
-ui:CreateUI()
+SpeedTab:Toggle("Bomb Speed", function(v)
+    bombSpeedEnabled = v
+    updateHUD()
+end)
 
--- ── Speed ─────────────────────────────────────────────────────────────────────
-ui:AddSection("Speed")
+SpeedTab:Slider("Bomb Speed Value", 10, 200, function(v)
+    bombSpeed = v
+end)
 
-local speedToggle = ui:AddToggle({
-    Text          = "Speed",
-    Default       = false,
-    Flag          = "SpeedEnabled",
-    SavingEnabled = true,
-    Callback      = function(state)
-        regularSpeedEnabled = state
-        updateHUD()
-    end,
-})
+SpeedTab:Toggle("Spin Bot", function(v)
+    spinEnabled = v
+    if not v then spinAngle = 0 end
+    updateHUD()
+end)
 
-ui:AddSlider({
-    Text          = "Speed Value",
-    Default       = 20,
-    Min           = 1,
-    Max           = 100,
-    Flag          = "SpeedVal",
-    SavingEnabled = true,
-    Callback      = function(v) regularSpeed = v end,
-})
+-- Combat tab
+local CombatTab = Window:CreateSection("Combat")
 
-local spinToggle = ui:AddToggle({
-    Text          = "Spin Bot",
-    Default       = false,
-    Flag          = "SpinEnabled",
-    SavingEnabled = true,
-    Callback      = function(state)
-        spinEnabled = state
-        if not state then spinAngle = 0 end
-        updateHUD()
-    end,
-})
+CombatTab:Toggle("Infinite Jump", function(v)
+    infiniteJumpEnabled = v
+    updateHUD()
+end)
 
-ui:AddSeparator()
+CombatTab:Toggle("Noclip", function(v)
+    noclipEnabled = v
+    updateHUD()
+end)
 
--- ── Bomb ──────────────────────────────────────────────────────────────────────
-ui:AddSection("Bomb")
+-- Settings tab
+local SettingsTab = Window:CreateSection("Settings")
 
-local bombToggle = ui:AddToggle({
-    Text          = "Bomb Speed",
-    Default       = false,
-    Flag          = "BombEnabled",
-    SavingEnabled = true,
-    Callback      = function(state)
-        bombSpeedEnabled = state
-        updateHUD()
-    end,
-})
+SettingsTab:Toggle("Frozen Check", function(v)
+    frozenCheckEnabled = v
+end)
 
-ui:AddSlider({
-    Text          = "Bomb Speed Value",
-    Default       = 10,
-    Min           = 1,
-    Max           = 100,
-    Flag          = "BombVal",
-    SavingEnabled = true,
-    Callback      = function(v) bombSpeed = v end,
-})
+SettingsTab:Toggle("Ladder Check", function(v)
+    ladderCheckEnabled = v
+end)
 
-ui:AddSeparator()
+-- Visuals tab
+local VisualsTab = Window:CreateSection("Visuals")
 
--- ── Settings ──────────────────────────────────────────────────────────────────
-ui:AddSection("Settings")
-
-ui:AddToggle({
-    Text          = "Ladder Check",
-    Default       = true,
-    Flag          = "LadderCheck",
-    SavingEnabled = true,
-    Callback      = function(state) ladderCheckEnabled = state end,
-})
-
-ui:AddToggle({
-    Text          = "Frozen Check",
-    Default       = true,
-    Flag          = "FrozenCheck",
-    SavingEnabled = true,
-    Callback      = function(state) frozenCheckEnabled = state end,
-})
-
-local infJumpToggle = ui:AddToggle({
-    Text          = "Infinite Jump",
-    Default       = false,
-    Flag          = "InfJump",
-    SavingEnabled = true,
-    Callback      = function(state)
-        infiniteJumpEnabled = state
-        updateHUD()
-    end,
-})
-
-local noclipToggle = ui:AddToggle({
-    Text          = "Noclip",
-    Default       = false,
-    Flag          = "NoclipEnabled",
-    SavingEnabled = true,
-    Callback      = function(state)
-        noclipEnabled = state
-        if not state then
-            local char = LocalPlayer.Character
-            if char then
-                for _, v in ipairs(char:GetDescendants()) do
-                    if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then v.CanCollide = true end
-                end
-            end
-        end
-        updateHUD()
-    end,
-})
-
-ui:AddSeparator()
-
--- ── Keybinds ──────────────────────────────────────────────────────────────────
-ui:AddSection("Keybinds")
-
-ui:AddKeybind({
-    Text            = "Speed",
-    Default         = Enum.KeyCode.Unknown,
-    Flag            = "SpeedKey",
-    SavingEnabled   = true,
-    Callback        = function() speedToggle:Set(not regularSpeedEnabled) end,
-    ChangedCallback = function() end,
-})
-
-ui:AddKeybind({
-    Text            = "Bomb Speed",
-    Default         = Enum.KeyCode.Unknown,
-    Flag            = "BombKey",
-    SavingEnabled   = true,
-    Callback        = function() bombToggle:Set(not bombSpeedEnabled) end,
-    ChangedCallback = function() end,
-})
-
-ui:AddKeybind({
-    Text            = "Spin Bot",
-    Default         = Enum.KeyCode.Unknown,
-    Flag            = "SpinKey",
-    SavingEnabled   = true,
-    Callback        = function() spinToggle:Set(not spinEnabled) end,
-    ChangedCallback = function() end,
-})
-
-ui:AddKeybind({
-    Text            = "Infinite Jump",
-    Default         = Enum.KeyCode.Unknown,
-    Flag            = "InfJumpKey",
-    SavingEnabled   = true,
-    Callback        = function() infJumpToggle:Set(not infiniteJumpEnabled) end,
-    ChangedCallback = function() end,
-})
-
-ui:AddKeybind({
-    Text            = "Noclip",
-    Default         = Enum.KeyCode.Unknown,
-    Flag            = "NoclipKey",
-    SavingEnabled   = true,
-    Callback        = function() noclipToggle:Set(not noclipEnabled) end,
-    ChangedCallback = function() end,
-})
-
-ui:AddSeparator()
-
--- ── Visuals: Scenes ───────────────────────────────────────────────────────────
-ui:AddSection("Visuals: Scenes")
-
-ui:AddDropdown({
-    Text          = "Scene",
-    Default       = "None",
-    Options       = {"None","Ultra Realism","Golden Valley","Rainy Night","Neon City","Frostbite","Cinematic","Blood Moon","Silent Fog"},
-    Flag          = "ScenePreset",
-    SavingEnabled = false,
-    Callback      = function(opt)
-        if opt == "None" then resetLighting()
-        else applyLightingPreset(SCENE_PRESETS[opt]) end
-    end,
-})
-
--- ── Visuals: Weather ──────────────────────────────────────────────────────────
-ui:AddSection("Visuals: Weather")
-
-ui:AddDropdown({
-    Text          = "Weather",
-    Default       = "None",
-    Options       = {"None","Clear","Cloudy","Foggy","Rainy","Stormy","Sunrise","Blizzard","Firefly"},
-    Flag          = "WeatherPreset",
-    SavingEnabled = false,
-    Callback      = function(opt)
-        if opt == "None" then resetLighting()
-        else applyLightingPreset(WEATHER_PRESETS[opt]) end
-    end,
-})
-
--- ── FPS ───────────────────────────────────────────────────────────────────────
-ui:AddSection("FPS")
-
-ui:AddToggle({ Text="No Particles",  Default=false, Flag="NoParticles",  SavingEnabled=false, Callback=function(s) setNoParticles(s)  end })
-ui:AddToggle({ Text="No Map Lights", Default=false, Flag="NoLights",     SavingEnabled=false, Callback=function(s) setNoLights(s)     end })
-ui:AddToggle({ Text="No Post FX",    Default=false, Flag="NoPostFX",     SavingEnabled=false, Callback=function(s) setNoPostFX(s)     end })
-ui:AddToggle({ Text="Plastic Mats",  Default=false, Flag="PlasticMats",  SavingEnabled=false, Callback=function(s) setPlasticMats(s)  end })
-ui:AddToggle({ Text="Low Graphics",  Default=false, Flag="LowGraphics",  SavingEnabled=false, Callback=function(s) setLowGraphics(s)  end })
-
--- ── Insert toggles GUI ────────────────────────────────────────────────────────
-UserInputService.InputBegan:Connect(function(input)
-    if input.KeyCode == Enum.KeyCode.Insert then
-        ui:ToggleGuiVisibility()
+VisualsTab:Dropdown("Scene", {
+    "None","Ultra Realism","Golden Valley","Rainy Night",
+    "Neon City","Frostbite","Cinematic","Blood Moon","Silent Fog"
+}, function(v)
+    if v == "None" then resetLighting() else
+        local p = SCENE_PRESETS[v]
+        if p then applyLightingPreset(p) end
     end
 end)
 
--- ── Infinite jump ─────────────────────────────────────────────────────────────
-UserInputService.JumpRequest:Connect(function()
+VisualsTab:Dropdown("Weather", {
+    "None","Clear","Cloudy","Foggy","Rainy","Stormy","Sunrise","Blizzard","Firefly"
+}, function(v)
+    if v == "None" then resetLighting() else
+        local p = WEATHER_PRESETS[v]
+        if p then applyLightingPreset(p) end
+    end
+end)
+
+VisualsTab:Toggle("No Particles", function(v) setNoParticles(v) end)
+VisualsTab:Toggle("No Lights",    function(v) setNoLights(v)    end)
+VisualsTab:Toggle("No PostFX",    function(v) setNoPostFX(v)    end)
+VisualsTab:Toggle("Low Graphics", function(v) setLowGraphics(v) end)
+
+-- Auto-select first tab
+task.defer(function()
+    for _, desc in ipairs(CoreGui:GetDescendants()) do
+        if desc:IsA("TextButton") and desc.Name:sub(1, 6) == "tabBtn" then
+            desc.MouseButton1Click:Fire()
+            return
+        end
+    end
+end)
+
+-- Infinite jump
+UIS.JumpRequest:Connect(function()
     if not infiniteJumpEnabled then return end
-    local char = LocalPlayer.Character
+    local char = LP.Character
     if not char then return end
-    local hum = char:FindFirstChild("Humanoid")
-    if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Health > 0 then
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
 end)
 
--- ── RenderStepped — speed / spin ──────────────────────────────────────────────
+-- Noclip
+RunService.Heartbeat:Connect(function()
+    if not noclipEnabled then return end
+    local char = LP.Character
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            part.CanCollide = false
+        end
+    end
+end)
+
+-- Speed / spin
 RunService.RenderStepped:Connect(function(dt)
-    local char = LocalPlayer.Character
+    local char = LP.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChild("Humanoid")
@@ -507,16 +337,4 @@ RunService.RenderStepped:Connect(function(dt)
         newCF = CFrame.new(newCF.Position) * CFrame.Angles(0, spinAngle, 0)
     end
     if newCF ~= hrp.CFrame then hrp.CFrame = newCF end
-end)
-
--- ── Heartbeat — noclip ───────────────────────────────────────────────────────
-RunService.Heartbeat:Connect(function()
-    if not noclipEnabled then return end
-    local char = LocalPlayer.Character
-    if not char then return end
-    for _, v in ipairs(char:GetDescendants()) do
-        if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then
-            v.CanCollide = false
-        end
-    end
 end)
