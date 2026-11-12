@@ -19,6 +19,11 @@ local ladderCheckEnabled  = true
 local frozenCheckEnabled  = true
 local jumpUnlockEnabled   = false
 local infiniteJumpEnabled = false
+local hbEnabled           = false
+local hbSize              = 6
+local originalSizes       = {}  -- [part] = original Vector3 size
+local spinEnabled         = false
+local spinAngle           = 0
 
 local menuVisible         = true
 local listeningForKey     = false
@@ -49,7 +54,7 @@ ScreenGui.Enabled = true
 ScreenGui.Parent  = CoreGui
 
 local Frame = Instance.new("Frame")
-Frame.Size                   = UDim2.new(0, 240, 0, 190)
+Frame.Size                   = UDim2.new(0, 240, 0, 215)
 Frame.Position               = UDim2.new(0.5, -120, 0.4, -95)
 Frame.BackgroundColor3       = Color3.fromRGB(30, 30, 30)
 Frame.BorderSizePixel        = 0
@@ -89,7 +94,7 @@ for i, name in ipairs(TAB_NAMES) do
     tabButtons[name] = b
 
     local cf = Instance.new("Frame")
-    cf.Size                   = UDim2.new(1, 0, 0, 140)
+    cf.Size                   = UDim2.new(1, 0, 0, 165)
     cf.Position               = UDim2.new(0, 0, 0, 50)
     cf.BackgroundTransparency = 1
     cf.BorderSizePixel        = 0
@@ -143,9 +148,9 @@ local function mkBtn(parent, txt, y, active)
     return b
 end
 
-local function mkSlider(parent, y, initVal, onChange)
+local function mkSlider(parent, y, initVal, minV, maxV, prefix, onChange)
     local lbl = Instance.new("TextLabel")
-    lbl.Text                   = string.format("Speed: %d", initVal)
+    lbl.Text                   = string.format("%s: %d", prefix, initVal)
     lbl.TextColor3             = Color3.fromRGB(255, 255, 255)
     lbl.TextSize               = 12
     lbl.Font                   = Enum.Font.Gotham
@@ -184,10 +189,10 @@ local function mkSlider(parent, y, initVal, onChange)
     local sd = false  -- slider dragging
 
     local function update(v)
-        v = math.floor(math.clamp(v, SLIDER_MIN, SLIDER_MAX) + 0.5)
-        local pct = (v - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)
+        v = math.floor(math.clamp(v, minV, maxV) + 0.5)
+        local pct = (v - minV) / (maxV - minV)
         fill.Size = UDim2.new(pct, 0, 1, 0)
-        lbl.Text  = string.format("Speed: %d", v)
+        lbl.Text  = string.format("%s: %d", prefix, v)
         onChange(v)
     end
 
@@ -195,7 +200,7 @@ local function mkSlider(parent, y, initVal, onChange)
         local tl = track.AbsolutePosition.X
         local tw = track.AbsoluteSize.X
         if tw <= 0 then return end
-        update(SLIDER_MIN + math.clamp((x - tl) / tw, 0, 1) * (SLIDER_MAX - SLIDER_MIN))
+        update(minV + math.clamp((x - tl) / tw, 0, 1) * (maxV - minV))
     end
 
     track.InputBegan:Connect(function(i)
@@ -222,7 +227,12 @@ end
 local RC = contentFrames["Regular"]
 
 local RegularToggle = mkBtn(RC, "Speed: OFF", 5, false)
-mkSlider(RC, 35, regularSpeed, function(v) regularSpeed = v end)
+mkSlider(RC, 35, regularSpeed, 1, 100, "Speed", function(v) regularSpeed = v end)
+
+local HBToggle   = mkBtn(RC, "HB Expand: OFF", 68, false)
+mkSlider(RC, 97, hbSize, 1, 20, "Size", function(v) hbSize = v end)
+
+local SpinToggle = mkBtn(RC, "Spin Bot: OFF", 132, false)
 
 RegularToggle.MouseButton1Click:Connect(function()
     regularSpeedEnabled = not regularSpeedEnabled
@@ -231,11 +241,34 @@ RegularToggle.MouseButton1Click:Connect(function()
         and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
 end)
 
+HBToggle.MouseButton1Click:Connect(function()
+    hbEnabled = not hbEnabled
+    HBToggle.Text             = hbEnabled and "HB Expand: ON" or "HB Expand: OFF"
+    HBToggle.BackgroundColor3 = hbEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+    if not hbEnabled then
+        for part, origSize in pairs(originalSizes) do
+            if part and part.Parent then
+                part.Size = origSize
+            end
+        end
+        originalSizes = {}
+    end
+end)
+
+SpinToggle.MouseButton1Click:Connect(function()
+    spinEnabled = not spinEnabled
+    SpinToggle.Text             = spinEnabled and "Spin Bot: ON" or "Spin Bot: OFF"
+    SpinToggle.BackgroundColor3 = spinEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+    if not spinEnabled then spinAngle = 0 end
+end)
+
 -- ── Bomb tab ──────────────────────────────────────────────────────────────────
 local BC = contentFrames["Bomb"]
 
 local BombToggle = mkBtn(BC, "Bomb Speed: OFF", 5, false)
-mkSlider(BC, 35, bombSpeed, function(v) bombSpeed = v end)
+mkSlider(BC, 35, bombSpeed, 1, 100, "Speed", function(v) bombSpeed = v end)
 
 BombToggle.MouseButton1Click:Connect(function()
     bombSpeedEnabled = not bombSpeedEnabled
@@ -369,14 +402,23 @@ RunService.RenderStepped:Connect(function(dt)
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum or hum.Health <= 0 then return end
 
-    if jumpUnlockEnabled and hum.JumpPower <= 0 then
-        hum.JumpPower = 50
+    if jumpUnlockEnabled then
+        if hum.JumpPower  <= 0 then hum.JumpPower  = 50  end
+        if hum.JumpHeight <= 0 then hum.JumpHeight = 7.2 end
     end
 
-    local dir = hum.MoveDirection
-    if frozenCheckEnabled and hum.WalkSpeed < 1 then return end
+    -- Frozen check: anchored HRP, PlatformStand, or BodyPosition are all freeze patterns
+    if frozenCheckEnabled then
+        if hrp.Anchored then return end
+        if hum.PlatformStand then return end
+        for _, v in ipairs(hrp:GetChildren()) do
+            if v:IsA("BodyPosition") or v:IsA("BodyVelocity") then return end
+        end
+    end
+
     if ladderCheckEnabled and isOnLadder(hum) then return end
 
+    local dir = hum.MoveDirection
     local speed = 0
     if hasBomb() then
         if bombSpeedEnabled then speed = bombSpeed end
@@ -384,8 +426,37 @@ RunService.RenderStepped:Connect(function(dt)
         speed = regularSpeed
     end
 
+    local newCF = hrp.CFrame
     if speed > 0 and dir.Magnitude > 0 then
-        hrp.CFrame = hrp.CFrame + dir * speed * dt
+        newCF = newCF + dir * speed * dt
+    end
+    if spinEnabled then
+        spinAngle = (spinAngle + 20 * dt) % (2 * math.pi)
+        newCF = CFrame.new(newCF.Position) * CFrame.Angles(0, spinAngle, 0)
+    end
+    if newCF ~= hrp.CFrame then
+        hrp.CFrame = newCF
+    end
+end)
+
+-- ── Heartbeat — HB expander ───────────────────────────────────────────────────
+-- Expands all collidable body parts (Head, Torso, limbs) on other players.
+-- HumanoidRootPart is intentionally skipped — it has CanCollide=false and
+-- is not what the game's explosion radius check hits.
+RunService.Heartbeat:Connect(function()
+    if not hbEnabled then return end
+    local sz = Vector3.new(hbSize, hbSize, hbSize)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            for _, part in ipairs(p.Character:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                    if not originalSizes[part] then
+                        originalSizes[part] = part.Size
+                    end
+                    part.Size = sz
+                end
+            end
+        end
     end
 end)
 
