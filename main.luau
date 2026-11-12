@@ -6,19 +6,26 @@ local Players          = game:GetService("Players")
 local CoreGui          = game:GetService("CoreGui")
 local LocalPlayer      = Players.LocalPlayer
 
-local speedEnabled     = false
-local bombPauseEnabled = true
-local speedValue       = 1.0
-local sliderMin        = 1.0
-local sliderMax        = 5.0
-local BASE_WALKSPEED   = 16
+-- ── State ─────────────────────────────────────────────────────────────────────
+local BASE_WALKSPEED      = 16
 
-local keys           = {}
-local dragging       = false
-local sliderDragging = false
-local dragStart      = Vector2.new()
-local startOffset    = UDim2.new()
+local regularSpeedEnabled = false
+local regularSpeed        = 1.5
 
+local bombSpeedEnabled    = false
+local bombSpeed           = 1.0
+
+local ladderCheckEnabled  = true
+local frozenCheckEnabled  = true
+
+local menuVisible         = true
+local listeningForKey     = false
+local toggleKey           = nil  -- nil = button only
+
+local SLIDER_MIN = 1.0
+local SLIDER_MAX = 5.0
+
+-- ── Helpers ───────────────────────────────────────────────────────────────────
 local function hasBomb()
     local char = LocalPlayer.Character
     if not char then return false end
@@ -30,126 +37,281 @@ local function hasBomb()
     return false
 end
 
--- ── GUI ──────────────────────────────────────────────────────────────────────
+local function isOnLadder(hum)
+    return hum:GetState() == Enum.HumanoidStateType.Climbing
+end
 
+-- ── GUI root ──────────────────────────────────────────────────────────────────
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Enabled = true
 ScreenGui.Parent  = CoreGui
 
 local Frame = Instance.new("Frame")
-Frame.Size                   = UDim2.new(0, 240, 0, 128)
-Frame.Position               = UDim2.new(0.5, -120, 0.4, -64)
+Frame.Size                   = UDim2.new(0, 240, 0, 190)
+Frame.Position               = UDim2.new(0.5, -120, 0.4, -95)
 Frame.BackgroundColor3       = Color3.fromRGB(30, 30, 30)
-Frame.BackgroundTransparency = 0
 Frame.BorderSizePixel        = 0
 Frame.ClipsDescendants       = false
 Frame.Parent                 = ScreenGui
 Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 8)
 
--- helper: simple text label
-local function mkLabel(parent, txt, y, h, size)
-    local l = Instance.new("TextLabel")
-    l.Text                   = txt
-    l.TextColor3             = Color3.fromRGB(255, 255, 255)
-    l.TextSize               = size or 14
-    l.BackgroundTransparency = 1
-    l.BorderSizePixel        = 0
-    l.Size                   = UDim2.new(0.9, 0, 0, h)
-    l.Position               = UDim2.new(0.05, 0, 0, y)
-    l.Parent                 = parent
-    return l
+-- Title (also drag handle)
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Text                   = "Nocturnix | Speed"
+TitleLabel.TextColor3             = Color3.fromRGB(255, 255, 255)
+TitleLabel.TextSize               = 13
+TitleLabel.Font                   = Enum.Font.Gotham
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.BorderSizePixel        = 0
+TitleLabel.Size                   = UDim2.new(1, 0, 0, 24)
+TitleLabel.Position               = UDim2.new(0, 0, 0, 0)
+TitleLabel.Parent                 = Frame
+
+-- ── Tabs ─────────────────────────────────────────────────────────────────────
+local TAB_NAMES    = { "Regular", "Bomb", "Settings" }
+local tabButtons   = {}
+local contentFrames = {}
+
+for i, name in ipairs(TAB_NAMES) do
+    local b = Instance.new("TextButton")
+    b.Text             = name
+    b.TextColor3       = Color3.fromRGB(200, 200, 200)
+    b.TextSize         = 12
+    b.Font             = Enum.Font.Gotham
+    b.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    b.BorderSizePixel  = 0
+    b.Size             = UDim2.new(0, 72, 0, 20)
+    b.Position         = UDim2.new(0, 4 + (i - 1) * 77, 0, 26)
+    b.Parent           = Frame
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+    tabButtons[name] = b
+
+    local cf = Instance.new("Frame")
+    cf.Size                   = UDim2.new(1, 0, 0, 140)
+    cf.Position               = UDim2.new(0, 0, 0, 50)
+    cf.BackgroundTransparency = 1
+    cf.BorderSizePixel        = 0
+    cf.ClipsDescendants       = false
+    cf.Visible                = false
+    cf.Parent                 = Frame
+    contentFrames[name] = cf
 end
 
--- helper: button
-local function mkBtn(txt, y)
+-- Divider
+local Divider = Instance.new("Frame")
+Divider.Size             = UDim2.new(1, -16, 0, 1)
+Divider.Position         = UDim2.new(0, 8, 0, 48)
+Divider.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+Divider.BorderSizePixel  = 0
+Divider.Parent           = Frame
+
+local function switchTab(name)
+    for tname, btn in pairs(tabButtons) do
+        btn.BackgroundColor3 = tname == name
+            and Color3.fromRGB(60, 60, 60)
+            or  Color3.fromRGB(45, 45, 45)
+        btn.TextColor3 = tname == name
+            and Color3.fromRGB(255, 255, 255)
+            or  Color3.fromRGB(200, 200, 200)
+    end
+    for cname, cf in pairs(contentFrames) do
+        cf.Visible = cname == name
+    end
+end
+
+for name, btn in pairs(tabButtons) do
+    btn.MouseButton1Click:Connect(function() switchTab(name) end)
+end
+
+-- ── Reusable helpers ──────────────────────────────────────────────────────────
+local function mkBtn(parent, txt, y, active)
     local b = Instance.new("TextButton")
-    b.Text                   = txt
-    b.TextColor3             = Color3.fromRGB(255, 255, 255)
-    b.TextSize               = 14
-    b.BackgroundColor3       = Color3.fromRGB(55, 55, 55)
-    b.BackgroundTransparency = 0
-    b.BorderSizePixel        = 0
-    b.Size                   = UDim2.new(0.9, 0, 0, 22)
-    b.Position               = UDim2.new(0.05, 0, 0, y)
-    b.Parent                 = Frame
+    b.Text             = txt
+    b.TextColor3       = Color3.fromRGB(255, 255, 255)
+    b.TextSize         = 13
+    b.Font             = Enum.Font.Gotham
+    b.BackgroundColor3 = active
+        and Color3.fromRGB(40, 110, 40)
+        or  Color3.fromRGB(55, 55, 55)
+    b.BorderSizePixel  = 0
+    b.Size             = UDim2.new(0.9, 0, 0, 22)
+    b.Position         = UDim2.new(0.05, 0, 0, y)
+    b.Parent           = parent
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
     return b
 end
 
-mkLabel(Frame, "Nocturnix | Speed", 7, 18, 14)
+local function mkSlider(parent, y, initVal, onChange)
+    local lbl = Instance.new("TextLabel")
+    lbl.Text                   = string.format("Speed: %.1fx", initVal)
+    lbl.TextColor3             = Color3.fromRGB(255, 255, 255)
+    lbl.TextSize               = 12
+    lbl.Font                   = Enum.Font.Gotham
+    lbl.BackgroundTransparency = 1
+    lbl.BorderSizePixel        = 0
+    lbl.Size                   = UDim2.new(0.9, 0, 0, 14)
+    lbl.Position               = UDim2.new(0.05, 0, 0, y)
+    lbl.TextXAlignment         = Enum.TextXAlignment.Center
+    lbl.Parent                 = parent
 
-local ToggleButton = mkBtn("Speed: OFF", 29)
-local BombButton   = mkBtn("Bomb Pause: ON", 55)
-BombButton.TextColor3 = Color3.fromRGB(100, 255, 120)
+    local track = Instance.new("Frame")
+    track.Size             = UDim2.new(0.9, 0, 0, 10)
+    track.Position         = UDim2.new(0.05, 0, 0, y + 18)
+    track.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    track.BorderSizePixel  = 0
+    track.ClipsDescendants = false
+    track.Parent           = parent
+    Instance.new("UICorner", track).CornerRadius = UDim.new(0, 5)
 
-local SpeedLabel = mkLabel(Frame, "Speed: 1.0x", 82, 16, 13)
-SpeedLabel.TextXAlignment = Enum.TextXAlignment.Center
+    local fill = Instance.new("Frame")
+    fill.BackgroundColor3 = Color3.fromRGB(90, 190, 90)
+    fill.BorderSizePixel  = 0
+    fill.ClipsDescendants = false
+    fill.Parent           = track
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 5)
 
--- Slider track (tall enough to see, lighter color so it stands out)
-local SliderTrack = Instance.new("Frame")
-SliderTrack.Name             = "SliderTrack"
-SliderTrack.Size             = UDim2.new(0.9, 0, 0, 10)
-SliderTrack.Position         = UDim2.new(0.05, 0, 0, 102)
-SliderTrack.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-SliderTrack.BorderSizePixel  = 0
-SliderTrack.ClipsDescendants = false   -- allow knob to overflow track bounds
-SliderTrack.Parent           = Frame
-Instance.new("UICorner", SliderTrack).CornerRadius = UDim.new(0, 5)
+    local knob = Instance.new("Frame")
+    knob.Size             = UDim2.new(0, 16, 0, 16)
+    knob.Position         = UDim2.new(1, -8, 0.5, -8)
+    knob.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
+    knob.BorderSizePixel  = 0
+    knob.ZIndex           = 4
+    knob.Parent           = fill
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(0.5, 0)
 
--- Filled portion
-local SliderFill = Instance.new("Frame")
-SliderFill.Size             = UDim2.new(0, 0, 1, 0)   -- updated by updateSlider
-SliderFill.BackgroundColor3 = Color3.fromRGB(90, 190, 90)
-SliderFill.BorderSizePixel  = 0
-SliderFill.ClipsDescendants = false
-SliderFill.Parent           = SliderTrack
-Instance.new("UICorner", SliderFill).CornerRadius = UDim.new(0, 5)
+    local sd = false  -- slider dragging
 
--- Knob: child of Fill, always at Fill's right edge — no manual pixel math needed
-local SliderKnob = Instance.new("Frame")
-SliderKnob.Size             = UDim2.new(0, 16, 0, 16)
-SliderKnob.Position         = UDim2.new(1, -8, 0.5, -8)   -- right edge, centered
-SliderKnob.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
-SliderKnob.BorderSizePixel  = 0
-SliderKnob.ZIndex           = 4
-SliderKnob.Parent           = SliderFill
-Instance.new("UICorner", SliderKnob).CornerRadius = UDim.new(0.5, 0)
+    local function update(v)
+        v = math.floor(math.clamp(v, SLIDER_MIN, SLIDER_MAX) * 10 + 0.5) / 10
+        local pct = (v - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)
+        fill.Size = UDim2.new(pct, 0, 1, 0)
+        lbl.Text  = string.format("Speed: %.1fx", v)
+        onChange(v)
+    end
 
--- ── Slider logic ─────────────────────────────────────────────────────────────
+    local function fromX(x)
+        local tl = track.AbsolutePosition.X
+        local tw = track.AbsoluteSize.X
+        if tw <= 0 then return end
+        update(SLIDER_MIN + math.clamp((x - tl) / tw, 0, 1) * (SLIDER_MAX - SLIDER_MIN))
+    end
 
-local function updateSlider()
-    local pct = math.clamp((speedValue - sliderMin) / (sliderMax - sliderMin), 0, 1)
-    SliderFill.Size = UDim2.new(pct, 0, 1, 0)
-    SpeedLabel.Text = string.format("Speed: %.1fx", speedValue)
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            sd = true; fromX(i.Position.X)
+        end
+    end)
+    knob.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then sd = true end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then sd = false end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if sd and i.UserInputType == Enum.UserInputType.MouseMovement then
+            fromX(i.Position.X)
+        end
+    end)
+
+    update(initVal)
 end
 
-local function sliderSetFromAbsX(absX)
-    local tl = SliderTrack.AbsolutePosition.X
-    local tw = SliderTrack.AbsoluteSize.X
-    if tw <= 0 then return end
-    local pct = math.clamp((absX - tl) / tw, 0, 1)
-    local raw = sliderMin + pct * (sliderMax - sliderMin)
-    speedValue = math.floor(raw * 10 + 0.5) / 10
-    updateSlider()
+-- ── Regular tab ───────────────────────────────────────────────────────────────
+local RC = contentFrames["Regular"]
+
+local RegularToggle = mkBtn(RC, "Speed: OFF", 5, false)
+mkSlider(RC, 35, regularSpeed, function(v) regularSpeed = v end)
+
+RegularToggle.MouseButton1Click:Connect(function()
+    regularSpeedEnabled = not regularSpeedEnabled
+    RegularToggle.Text             = regularSpeedEnabled and "Speed: ON" or "Speed: OFF"
+    RegularToggle.BackgroundColor3 = regularSpeedEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+end)
+
+-- ── Bomb tab ──────────────────────────────────────────────────────────────────
+local BC = contentFrames["Bomb"]
+
+local BombToggle = mkBtn(BC, "Bomb Speed: OFF", 5, false)
+mkSlider(BC, 35, bombSpeed, function(v) bombSpeed = v end)
+
+BombToggle.MouseButton1Click:Connect(function()
+    bombSpeedEnabled = not bombSpeedEnabled
+    BombToggle.Text             = bombSpeedEnabled and "Bomb Speed: ON" or "Bomb Speed: OFF"
+    BombToggle.BackgroundColor3 = bombSpeedEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+end)
+
+-- ── Settings tab ──────────────────────────────────────────────────────────────
+local SC = contentFrames["Settings"]
+
+local KeybindBtn = mkBtn(SC, "Toggle Key: NONE", 5, false)
+local LadderBtn  = mkBtn(SC, "Ladder Check: ON", 35, true)
+local FrozenBtn  = mkBtn(SC, "Frozen Check: ON", 62, true)
+
+local function updateToggleState()
+    RegularToggle.Text             = regularSpeedEnabled and "Speed: ON" or "Speed: OFF"
+    RegularToggle.BackgroundColor3 = regularSpeedEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
 end
 
-SliderTrack.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        sliderDragging = true
-        sliderSetFromAbsX(input.Position.X)
+KeybindBtn.MouseButton1Click:Connect(function()
+    if listeningForKey then return end
+    listeningForKey = true
+    KeybindBtn.Text             = "Press a key..."
+    KeybindBtn.BackgroundColor3 = Color3.fromRGB(100, 90, 20)
+end)
+
+LadderBtn.MouseButton1Click:Connect(function()
+    ladderCheckEnabled = not ladderCheckEnabled
+    LadderBtn.Text             = ladderCheckEnabled and "Ladder Check: ON" or "Ladder Check: OFF"
+    LadderBtn.BackgroundColor3 = ladderCheckEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+end)
+
+FrozenBtn.MouseButton1Click:Connect(function()
+    frozenCheckEnabled = not frozenCheckEnabled
+    FrozenBtn.Text             = frozenCheckEnabled and "Frozen Check: ON" or "Frozen Check: OFF"
+    FrozenBtn.BackgroundColor3 = frozenCheckEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+end)
+
+-- ── Input handling ────────────────────────────────────────────────────────────
+UserInputService.InputBegan:Connect(function(input, processed)
+    -- Rebind capture (eats the key regardless of processed)
+    if listeningForKey then
+        listeningForKey = false
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            toggleKey = input.KeyCode
+            KeybindBtn.Text = "Toggle Key: " .. input.KeyCode.Name
+        else
+            KeybindBtn.Text = "Toggle Key: " .. (toggleKey and toggleKey.Name or "NONE")
+        end
+        KeybindBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+        return
+    end
+
+    -- Insert = hide / show menu
+    if input.KeyCode == Enum.KeyCode.Insert then
+        menuVisible = not menuVisible
+        Frame.Visible = menuVisible
+        return
+    end
+
+    -- Toggle key fires speed toggle
+    if not processed and toggleKey and input.KeyCode == toggleKey then
+        regularSpeedEnabled = not regularSpeedEnabled
+        updateToggleState()
     end
 end)
 
-SliderKnob.InputBegan:Connect(function(input)
+-- ── Frame drag (title bar only) ───────────────────────────────────────────────
+local dragging    = false
+local dragStart   = Vector2.new()
+local startOffset = UDim2.new()
+
+TitleLabel.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        sliderDragging = true
-    end
-end)
-
--- ── Frame dragging ────────────────────────────────────────────────────────────
-
-Frame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 and not sliderDragging then
         dragging    = true
         dragStart   = Vector2.new(input.Position.X, input.Position.Y)
         startOffset = Frame.Position
@@ -157,287 +319,49 @@ Frame.InputBegan:Connect(function(input)
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-    if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-    if sliderDragging then
-        sliderSetFromAbsX(input.Position.X)
-    elseif dragging then
-        local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local d = Vector2.new(input.Position.X, input.Position.Y) - dragStart
         Frame.Position = UDim2.new(
-            startOffset.X.Scale, startOffset.X.Offset + delta.X,
-            startOffset.Y.Scale, startOffset.Y.Offset + delta.Y
+            startOffset.X.Scale, startOffset.X.Offset + d.X,
+            startOffset.Y.Scale, startOffset.Y.Offset + d.Y
         )
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        sliderDragging = false
-        dragging       = false
-    end
-    for i, k in ipairs(keys) do
-        if k == input.KeyCode then table.remove(keys, i) break end
+        dragging = false
     end
 end)
 
-UserInputService.InputBegan:Connect(function(input, processed)
-    if not processed then table.insert(keys, input.KeyCode) end
-end)
-
--- ── Button toggles ────────────────────────────────────────────────────────────
-
-ToggleButton.MouseButton1Click:Connect(function()
-    speedEnabled = not speedEnabled
-    ToggleButton.Text             = speedEnabled and "Speed: ON"  or "Speed: OFF"
-    ToggleButton.BackgroundColor3 = speedEnabled
-        and Color3.fromRGB(40, 110, 40)
-        or  Color3.fromRGB(55, 55, 55)
-end)
-
-BombButton.MouseButton1Click:Connect(function()
-    bombPauseEnabled = not bombPauseEnabled
-    BombButton.Text       = bombPauseEnabled and "Bomb Pause: ON"  or "Bomb Pause: OFF"
-    BombButton.TextColor3 = bombPauseEnabled
-        and Color3.fromRGB(100, 255, 120)
-        or  Color3.fromRGB(200, 200, 200)
-end)
-
--- ── Heartbeat — WalkSpeed multiplier ─────────────────────────────────────────
--- speedValue is a multiplier (1.0 = normal, 2.0 = double, etc.)
--- WalkSpeed is set every frame so it survives character respawn and game resets.
-
-updateSlider()
-
+-- ── Heartbeat — WalkSpeed ─────────────────────────────────────────────────────
 RunService.Heartbeat:Connect(function()
     local char = LocalPlayer.Character
     if not char then return end
     local hum = char:FindFirstChild("Humanoid")
     if not hum or hum.Health <= 0 then return end
 
-    if speedEnabled and not (bombPauseEnabled and hasBomb()) then
-        hum.WalkSpeed = BASE_WALKSPEED * speedValue
+    local moving = hum.MoveDirection.Magnitude > 0
+
+    if frozenCheckEnabled and not moving then
+        hum.WalkSpeed = BASE_WALKSPEED
+        return
+    end
+
+    if ladderCheckEnabled and isOnLadder(hum) then
+        hum.WalkSpeed = BASE_WALKSPEED
+        return
+    end
+
+    if hasBomb() then
+        hum.WalkSpeed = bombSpeedEnabled
+            and BASE_WALKSPEED * bombSpeed
+            or  BASE_WALKSPEED
+    elseif regularSpeedEnabled then
+        hum.WalkSpeed = BASE_WALKSPEED * regularSpeed
     else
         hum.WalkSpeed = BASE_WALKSPEED
     end
 end)
--- Nocturnix | Speed GUI
 
-local UserInputService = game:GetService("UserInputService")
-local RunService       = game:GetService("RunService")
-local Players          = game:GetService("Players")
-local CoreGui          = game:GetService("CoreGui")
-local LocalPlayer      = Players.LocalPlayer
-
-local speedEnabled     = false
-local bombPauseEnabled = true
-local speedValue       = 1.0
-local sliderMin        = 0.1
-local sliderMax        = 10.0
-
-local keys           = {}
-local dragging       = false
-local sliderDragging = false
-local dragStart      = Vector2.new()
-local startOffset    = UDim2.new()
-
-local function hasBomb()
-    local char = LocalPlayer.Character
-    if not char then return false end
-    for _, v in ipairs(char:GetChildren()) do
-        if v:IsA("Tool") and string.lower(v.Name):find("bomb") then
-            return true
-        end
-    end
-    return false
-end
-
--- ── GUI ──────────────────────────────────────────────────────────────────────
-
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Enabled = true
-ScreenGui.Parent  = CoreGui
-
-local Frame = Instance.new("Frame")
-Frame.Size                   = UDim2.new(0, 240, 0, 128)
-Frame.Position               = UDim2.new(0.5, -120, 0.4, -64)
-Frame.BackgroundColor3       = Color3.fromRGB(30, 30, 30)
-Frame.BackgroundTransparency = 0
-Frame.BorderSizePixel        = 0
-Frame.ClipsDescendants       = false
-Frame.Parent                 = ScreenGui
-Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 8)
-
--- helper: simple text label
-local function mkLabel(parent, txt, y, h, size)
-    local l = Instance.new("TextLabel")
-    l.Text                   = txt
-    l.TextColor3             = Color3.fromRGB(255, 255, 255)
-    l.TextSize               = size or 14
-    l.BackgroundTransparency = 1
-    l.BorderSizePixel        = 0
-    l.Size                   = UDim2.new(0.9, 0, 0, h)
-    l.Position               = UDim2.new(0.05, 0, 0, y)
-    l.Parent                 = parent
-    return l
-end
-
--- helper: button
-local function mkBtn(txt, y)
-    local b = Instance.new("TextButton")
-    b.Text                   = txt
-    b.TextColor3             = Color3.fromRGB(255, 255, 255)
-    b.TextSize               = 14
-    b.BackgroundColor3       = Color3.fromRGB(55, 55, 55)
-    b.BackgroundTransparency = 0
-    b.BorderSizePixel        = 0
-    b.Size                   = UDim2.new(0.9, 0, 0, 22)
-    b.Position               = UDim2.new(0.05, 0, 0, y)
-    b.Parent                 = Frame
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
-    return b
-end
-
-mkLabel(Frame, "Nocturnix | Speed", 7, 18, 14)
-
-local ToggleButton = mkBtn("Speed: OFF", 29)
-local BombButton   = mkBtn("Bomb Pause: ON", 55)
-BombButton.TextColor3 = Color3.fromRGB(100, 255, 120)
-
-local SpeedLabel = mkLabel(Frame, "Speed: 1.0", 82, 16, 13)
-SpeedLabel.TextXAlignment = Enum.TextXAlignment.Center
-
--- Slider track (tall enough to see, lighter color so it stands out)
-local SliderTrack = Instance.new("Frame")
-SliderTrack.Name             = "SliderTrack"
-SliderTrack.Size             = UDim2.new(0.9, 0, 0, 10)
-SliderTrack.Position         = UDim2.new(0.05, 0, 0, 102)
-SliderTrack.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-SliderTrack.BorderSizePixel  = 0
-SliderTrack.ClipsDescendants = false   -- allow knob to overflow track bounds
-SliderTrack.Parent           = Frame
-Instance.new("UICorner", SliderTrack).CornerRadius = UDim.new(0, 5)
-
--- Filled portion
-local SliderFill = Instance.new("Frame")
-SliderFill.Size             = UDim2.new(0, 0, 1, 0)   -- updated by updateSlider
-SliderFill.BackgroundColor3 = Color3.fromRGB(90, 190, 90)
-SliderFill.BorderSizePixel  = 0
-SliderFill.ClipsDescendants = false
-SliderFill.Parent           = SliderTrack
-Instance.new("UICorner", SliderFill).CornerRadius = UDim.new(0, 5)
-
--- Knob: child of Fill, always at Fill's right edge — no manual pixel math needed
-local SliderKnob = Instance.new("Frame")
-SliderKnob.Size             = UDim2.new(0, 16, 0, 16)
-SliderKnob.Position         = UDim2.new(1, -8, 0.5, -8)   -- right edge, centered
-SliderKnob.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
-SliderKnob.BorderSizePixel  = 0
-SliderKnob.ZIndex           = 4
-SliderKnob.Parent           = SliderFill
-Instance.new("UICorner", SliderKnob).CornerRadius = UDim.new(0.5, 0)
-
--- ── Slider logic ─────────────────────────────────────────────────────────────
-
-local function updateSlider()
-    local pct = math.clamp((speedValue - sliderMin) / (sliderMax - sliderMin), 0, 1)
-    SliderFill.Size = UDim2.new(pct, 0, 1, 0)
-    SpeedLabel.Text = string.format("Speed: %.1f", speedValue)
-end
-
-local function sliderSetFromAbsX(absX)
-    local tl = SliderTrack.AbsolutePosition.X
-    local tw = SliderTrack.AbsoluteSize.X
-    if tw <= 0 then return end
-    local pct = math.clamp((absX - tl) / tw, 0, 1)
-    local raw = sliderMin + pct * (sliderMax - sliderMin)
-    speedValue = math.floor(raw * 10 + 0.5) / 10
-    updateSlider()
-end
-
-SliderTrack.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        sliderDragging = true
-        sliderSetFromAbsX(input.Position.X)
-    end
-end)
-
-SliderKnob.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        sliderDragging = true
-    end
-end)
-
--- ── Frame dragging ────────────────────────────────────────────────────────────
-
-Frame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 and not sliderDragging then
-        dragging    = true
-        dragStart   = Vector2.new(input.Position.X, input.Position.Y)
-        startOffset = Frame.Position
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-    if sliderDragging then
-        sliderSetFromAbsX(input.Position.X)
-    elseif dragging then
-        local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
-        Frame.Position = UDim2.new(
-            startOffset.X.Scale, startOffset.X.Offset + delta.X,
-            startOffset.Y.Scale, startOffset.Y.Offset + delta.Y
-        )
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        sliderDragging = false
-        dragging       = false
-    end
-    for i, k in ipairs(keys) do
-        if k == input.KeyCode then table.remove(keys, i) break end
-    end
-end)
-
-UserInputService.InputBegan:Connect(function(input, processed)
-    if not processed then table.insert(keys, input.KeyCode) end
-end)
-
--- ── Button toggles ────────────────────────────────────────────────────────────
-
-ToggleButton.MouseButton1Click:Connect(function()
-    speedEnabled = not speedEnabled
-    ToggleButton.Text             = speedEnabled and "Speed: ON"  or "Speed: OFF"
-    ToggleButton.BackgroundColor3 = speedEnabled
-        and Color3.fromRGB(40, 110, 40)
-        or  Color3.fromRGB(55, 55, 55)
-end)
-
-BombButton.MouseButton1Click:Connect(function()
-    bombPauseEnabled = not bombPauseEnabled
-    BombButton.Text       = bombPauseEnabled and "Bomb Pause: ON"  or "Bomb Pause: OFF"
-    BombButton.TextColor3 = bombPauseEnabled
-        and Color3.fromRGB(100, 255, 120)
-        or  Color3.fromRGB(200, 200, 200)
-end)
-
--- ── RenderStepped ─────────────────────────────────────────────────────────────
-
-updateSlider()   -- set initial fill/label (no AbsoluteSize needed with this approach)
-
-RunService.RenderStepped:Connect(function(dt)
-    if not speedEnabled then return end
-    if bombPauseEnabled and hasBomb() then return end
-
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum then return end
-    if hum.Health <= 0 then return end
-
-    local dir = hum.MoveDirection
-    if dir.Magnitude > 0 then
-        hrp.CFrame = hrp.CFrame + dir * speedValue * dt
-    end
-end)
+switchTab("Regular")
