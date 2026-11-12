@@ -17,6 +17,8 @@ local bombSpeed           = 10
 
 local ladderCheckEnabled  = true
 local frozenCheckEnabled  = true
+local jumpUnlockEnabled   = false
+local infiniteJumpEnabled = false
 
 local menuVisible         = true
 local listeningForKey     = false
@@ -245,9 +247,11 @@ end)
 -- ── Settings tab ──────────────────────────────────────────────────────────────
 local SC = contentFrames["Settings"]
 
-local KeybindBtn = mkBtn(SC, "Toggle Key: NONE", 5, false)
-local LadderBtn  = mkBtn(SC, "Ladder Check: ON", 35, true)
-local FrozenBtn  = mkBtn(SC, "Frozen Check: ON", 62, true)
+local KeybindBtn    = mkBtn(SC, "Toggle Key: NONE",  5,  false)
+local LadderBtn     = mkBtn(SC, "Ladder Check: ON",  32, true)
+local FrozenBtn     = mkBtn(SC, "Frozen Check: ON",  59, true)
+local JumpUnlockBtn = mkBtn(SC, "Jump Unlock: OFF",  86, false)
+local InfJumpBtn    = mkBtn(SC, "Infinite Jump: OFF", 113, false)
 
 local function updateToggleState()
     RegularToggle.Text             = regularSpeedEnabled and "Speed: ON" or "Speed: OFF"
@@ -274,6 +278,29 @@ FrozenBtn.MouseButton1Click:Connect(function()
     FrozenBtn.Text             = frozenCheckEnabled and "Frozen Check: ON" or "Frozen Check: OFF"
     FrozenBtn.BackgroundColor3 = frozenCheckEnabled
         and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+end)
+
+JumpUnlockBtn.MouseButton1Click:Connect(function()
+    jumpUnlockEnabled = not jumpUnlockEnabled
+    JumpUnlockBtn.Text             = jumpUnlockEnabled and "Jump Unlock: ON" or "Jump Unlock: OFF"
+    JumpUnlockBtn.BackgroundColor3 = jumpUnlockEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+end)
+
+InfJumpBtn.MouseButton1Click:Connect(function()
+    infiniteJumpEnabled = not infiniteJumpEnabled
+    InfJumpBtn.Text             = infiniteJumpEnabled and "Infinite Jump: ON" or "Infinite Jump: OFF"
+    InfJumpBtn.BackgroundColor3 = infiniteJumpEnabled
+        and Color3.fromRGB(40, 110, 40) or Color3.fromRGB(55, 55, 55)
+end)
+
+-- Infinite jump: re-trigger jump state on every jump input
+UserInputService.JumpRequest:Connect(function()
+    if not infiniteJumpEnabled then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
 end)
 
 -- ── Input handling ────────────────────────────────────────────────────────────
@@ -342,8 +369,12 @@ RunService.RenderStepped:Connect(function(dt)
     local hum = char:FindFirstChild("Humanoid")
     if not hrp or not hum or hum.Health <= 0 then return end
 
+    if jumpUnlockEnabled and hum.JumpPower <= 0 then
+        hum.JumpPower = 50
+    end
+
     local dir = hum.MoveDirection
-    if frozenCheckEnabled and dir.Magnitude == 0 then return end
+    if frozenCheckEnabled and hum.WalkSpeed < 1 then return end
     if ladderCheckEnabled and isOnLadder(hum) then return end
 
     local speed = 0
