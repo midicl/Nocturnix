@@ -132,31 +132,12 @@ local rbCycleOffset = 0  -- active offset (degrees) fed into hookmetamethod
 
 local saTargetPlayer = nil
 
-local plrHistory = {}   -- [player] = {positions={{pos=V3,t=number},...}}
-
-local hvh = {
-    -- Anti-aim
-    AAEnabled = false,
-    AAMode    = "Spin",
-    AASpeed   = 20,
-    aaAngle   = 0,
-    aaFlip    = false,
-    -- Fake lag
-    FLEnabled = false,
-    FLTicks   = 6,
-    flCount   = 0,
-    -- Void
-    VoidSpam   = false,
-    VoidHold   = false,
-    VoidDelay  = 0.1,
-    voidActive = false,
-    voidOrigin = nil,
-    voidTimer  = 0,
-    -- Resolver / Backtrack
-    ResEnabled = false,
-    ResMode    = "Backtrack",
-    BTTicks    = 3,
-}
+-- ======== FAKE LAG STATE ========
+local flEnabled    = false
+local flGhostCF    = nil   -- frozen server position
+local flRealCF     = nil   -- restored local position
+local flUpdateRate = 0.0   -- seconds between ghost updates (0 = fully frozen)
+local flLastUpdate = 0
 
 local FovCircle = Drawing.new("Circle")
 FovCircle.Color    = Color3.fromRGB(165, 95, 255)
@@ -164,27 +145,6 @@ FovCircle.Thickness = 1
 FovCircle.Filled   = false
 FovCircle.Visible  = false
 
--- ======== ESP STATE ========
-local esp = {
-    Enabled     = false,
-    Boxes       = true,
-    FilledBoxes = false,
-    FilledAlpha = 0.15,
-    Names       = true,
-    Health      = true,
-    Tracers     = false,
-    Distance    = true,
-    Chams       = false,
-    MaxDist     = 1000,
-    TextSize    = 13,
-    BoxThick    = 1.5,
-    BoxColor    = C3(255, 243, 220),
-    FilledColor = C3(255, 235, 200),
-    NameColor   = C3(255, 250, 238),
-    TracerColor = C3(190, 140, 255),
-    ChamFill    = C3(220, 175, 255),
-    ChamOutline = C3(255, 243, 220),
-}
 
 -- ======== LIGHTING SAVE ========
 local origLight = {
@@ -351,11 +311,13 @@ local function applyHeadless(on)
     for _, d in ipairs(head:GetDescendants()) do if d:IsA("Decal") then d.Transparency = on and 1 or 0 end end
     for _, acc in ipairs(char:GetChildren()) do
         if acc:IsA("Accessory") then
-            local h = acc:FindFirstChild("Handle"); if not h then continue end
-            for _, w in ipairs(h:GetChildren()) do
-                if w:IsA("Weld") or w:IsA("WeldConstraint") then
-                    local other = w.Part0 == h and w.Part1 or w.Part0
-                    if other and other.Name == "Head" then h.Transparency = on and 1 or 0 end
+            local h = acc:FindFirstChild("Handle")
+            if h then
+                for _, w in ipairs(h:GetChildren()) do
+                    if w:IsA("Weld") or w:IsA("WeldConstraint") then
+                        local other = w.Part0 == h and w.Part1 or w.Part0
+                        if other and other.Name == "Head" then h.Transparency = on and 1 or 0 end
+                    end
                 end
             end
         end
@@ -677,85 +639,6 @@ local function updateHUD()
     end
 end
 
--- ======== ESP OBJECTS ========
-local espObjects = {}
-
-local function newDraw(dtype, props)
-    local d = Drawing.new(dtype)
-    for k, v in pairs(props) do d[k] = v end
-    return d
-end
-
-local function createESP(player)
-    if player == LP then return end
-    local co = esp.BoxColor
-    local function L(t) return newDraw("Line", t) end
-    espObjects[player] = {
-        -- corner lines (C++ style, 8 lines)
-        TLH = L({Visible=false,Color=co,Thickness=esp.BoxThick,ZIndex=5}),
-        TLV = L({Visible=false,Color=co,Thickness=esp.BoxThick,ZIndex=5}),
-        TRH = L({Visible=false,Color=co,Thickness=esp.BoxThick,ZIndex=5}),
-        TRV = L({Visible=false,Color=co,Thickness=esp.BoxThick,ZIndex=5}),
-        BLH = L({Visible=false,Color=co,Thickness=esp.BoxThick,ZIndex=5}),
-        BLV = L({Visible=false,Color=co,Thickness=esp.BoxThick,ZIndex=5}),
-        BRH = L({Visible=false,Color=co,Thickness=esp.BoxThick,ZIndex=5}),
-        BRV = L({Visible=false,Color=co,Thickness=esp.BoxThick,ZIndex=5}),
-        -- fill
-        BoxFill   = newDraw("Square", {Visible=false,Filled=true,Color=esp.FilledColor,Thickness=1,Transparency=1-esp.FilledAlpha,ZIndex=3}),
-        -- name tag: black panel + text
-        NameBG    = newDraw("Square", {Visible=false,Filled=true,Color=Color3.new(0,0,0),Transparency=0.3,Thickness=0,ZIndex=5}),
-        Name      = newDraw("Text",   {Visible=false,Color=esp.NameColor,Size=esp.TextSize,Center=true,Outline=false,Font=Drawing.Fonts.Plex,ZIndex=6}),
-        Dist      = newDraw("Text",   {Visible=false,Color=C3(185,170,150),Size=esp.TextSize-3,Center=true,Outline=false,Font=Drawing.Fonts.Plex,ZIndex=6}),
-        -- health bar
-        HpOutline = newDraw("Square", {Visible=false,Filled=true,Color=Color3.new(0,0,0),Transparency=0,Thickness=0,ZIndex=4}),
-        HpBG      = newDraw("Square", {Visible=false,Filled=true,Color=C3(25,10,10),Transparency=0,Thickness=0,ZIndex=5}),
-        HpBar     = newDraw("Square", {Visible=false,Filled=true,Color=C3(0,200,60),Transparency=0,Thickness=0,ZIndex=6}),
-        Tracer    = newDraw("Line",   {Visible=false,Color=esp.TracerColor,Thickness=1,ZIndex=4}),
-        HL        = nil,
-    }
-end
-
-local function removeESP(player)
-    local obj = espObjects[player]; if not obj then return end
-    for _, v in pairs(obj) do
-        if type(v) == "userdata" and v.Remove then v:Remove() end
-    end
-    if obj.HL and obj.HL.Parent then obj.HL:Destroy() end
-    espObjects[player] = nil
-end
-
-local function updateESPChams(player, on)
-    local obj = espObjects[player]; if not obj then return end
-    if on then
-        local char = player.Character
-        if char and not obj.HL then
-            obj.HL = Instance.new("Highlight")
-            obj.HL.Name = "_TBCesP"
-            obj.HL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            obj.HL.FillColor = esp.ChamFill; obj.HL.OutlineColor = esp.ChamOutline
-            obj.HL.FillTransparency = 0.45; obj.HL.OutlineTransparency = 0
-            obj.HL.Parent = char
-        end
-    else
-        if obj.HL then obj.HL:Destroy(); obj.HL = nil end
-    end
-end
-
-for _, p in ipairs(Players:GetPlayers()) do createESP(p) end
-Players.PlayerAdded:Connect(function(p) task.wait(1); createESP(p) end)
-Players.PlayerRemoving:Connect(removeESP)
-
--- re-attach chams after respawn
-Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function(char)
-        task.wait(1)
-        local obj = espObjects[p]
-        if obj and esp.Chams then
-            if obj.HL then obj.HL:Destroy(); obj.HL = nil end
-            updateESPChams(p, true)
-        end
-    end)
-end)
 
 -- ======== LIBRARY LOAD ========
 -- universal http getter — pcall-based so nil globals don't crash the chain
@@ -809,9 +692,7 @@ local Tabs = {
     Combat   = Window:AddTab("Combat"),
     Char     = Window:AddTab("Character"),
     Visuals  = Window:AddTab("Visuals"),
-    ESP      = Window:AddTab("ESP"),
     FX       = Window:AddTab("FX"),
-    HvH      = Window:AddTab("HvH"),
     Settings = Window:AddTab("Settings"),
 }
 
@@ -977,6 +858,29 @@ CombatFollow:AddButton({
     end
 })
 
+-- Fake Lag subtab (CombatLeft)
+local CombatFL = CombatLeft:AddTab("Fake Lag")
+CombatFL:AddToggle("FLEnabled", {
+    Text = "Fake Lag", Default = false,
+    Tooltip = "Others see you frozen, you move freely — hitbox stays on your real position",
+    Callback = function(v)
+        flEnabled = v
+        if v then
+            local c2 = LP.Character
+            local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+            if h2 then flGhostCF = h2.CFrame; flLastUpdate = tick() end
+        else
+            flGhostCF = nil; flRealCF = nil
+        end
+    end
+})
+CombatFL:AddSlider("FLUpdateRate", {
+    Text = "Ghost Drift Speed", Default = 0, Min = 0, Max = 2, Rounding = 2,
+    Suffix = "s",
+    Tooltip = "0 = fully frozen ghost, higher = ghost slowly drifts toward real position (looks like jitter lag)",
+    Callback = function(v) flUpdateRate = v end
+})
+
 -- ======== CHARACTER TAB ========
 local CharLeft  = Tabs.Char:AddLeftTabbox()
 local CharRight = Tabs.Char:AddRightTabbox()
@@ -1068,100 +972,6 @@ VisWorld:AddButton({
     end
 })
 
--- ======== ESP TAB ========
--- C++ style player ESP via Drawing API
-local ESPLeft  = Tabs.ESP:AddLeftTabbox()
-local ESPRight = Tabs.ESP:AddRightTabbox()
-
-local ESPMain = ESPLeft:AddTab("Players")
-ESPMain:AddToggle("ESPEnabled", {
-    Text = "Enable ESP", Default = false,
-    Tooltip = "Master toggle — all ESP drawing",
-    Callback = function(v) esp.Enabled = v end
-})
-ESPMain:AddToggle("ESPBoxes", {
-    Text = "Boxes", Default = true,
-    Callback = function(v) esp.Boxes = v end
-})
-ESPMain:AddToggle("ESPFilledBoxes", {
-    Text = "Filled Boxes", Default = false,
-    Callback = function(v) esp.FilledBoxes = v end
-})
-ESPMain:AddToggle("ESPNames", {
-    Text = "Names", Default = true,
-    Callback = function(v) esp.Names = v end
-})
-ESPMain:AddToggle("ESPHealth", {
-    Text = "Health Bar", Default = true,
-    Callback = function(v) esp.Health = v end
-})
-ESPMain:AddToggle("ESPTracers", {
-    Text = "Tracers", Default = false,
-    Callback = function(v) esp.Tracers = v end
-})
-ESPMain:AddToggle("ESPDistance", {
-    Text = "Distance", Default = true,
-    Callback = function(v) esp.Distance = v end
-})
-ESPMain:AddToggle("ESPChams", {
-    Text = "Chams", Default = false,
-    Callback = function(v)
-        esp.Chams = v
-        for player in pairs(espObjects) do updateESPChams(player, v) end
-    end
-})
-
-local ESPCfg = ESPLeft:AddTab("Config")
-ESPCfg:AddSlider("ESPMaxDist", {
-    Text = "Max Distance", Default = 1000, Min = 100, Max = 2000, Rounding = 50,
-    Suffix = " studs",
-    Callback = function(v) esp.MaxDist = v end
-})
-ESPCfg:AddSlider("ESPTextSize", {
-    Text = "Text Size", Default = 13, Min = 8, Max = 24, Rounding = 1,
-    Callback = function(v) esp.TextSize = v end
-})
-ESPCfg:AddSlider("ESPBoxThick", {
-    Text = "Box Thickness", Default = 1, Min = 1, Max = 5, Rounding = 1,
-    Callback = function(v) esp.BoxThick = v end
-})
-ESPCfg:AddSlider("ESPFilledAlpha", {
-    Text = "Fill Opacity", Default = 15, Min = 1, Max = 100, Rounding = 1,
-    Suffix = "%",
-    Callback = function(v) esp.FilledAlpha = v / 100 end
-})
-
-local ESPCol = ESPRight:AddTab("Colors")
-ESPCol:AddLabel("Box Color"):AddColorPicker("ESPBoxColor", {
-    Default = C3(255,255,255),
-    Callback = function(v) esp.BoxColor = v end
-})
-ESPCol:AddLabel("Fill Color"):AddColorPicker("ESPFilledColor", {
-    Default = C3(255,255,255),
-    Callback = function(v) esp.FilledColor = v end
-})
-ESPCol:AddLabel("Name Color"):AddColorPicker("ESPNameColor", {
-    Default = C3(255,255,255),
-    Callback = function(v) esp.NameColor = v end
-})
-ESPCol:AddLabel("Tracer Color"):AddColorPicker("ESPTracerColor", {
-    Default = C3(255,0,100),
-    Callback = function(v) esp.TracerColor = v end
-})
-ESPCol:AddLabel("Cham Fill"):AddColorPicker("ESPChamFill", {
-    Default = C3(255,0,0),
-    Callback = function(v)
-        esp.ChamFill = v
-        for _, obj in pairs(espObjects) do if obj.HL then obj.HL.FillColor = v end end
-    end
-})
-ESPCol:AddLabel("Cham Outline"):AddColorPicker("ESPChamOutline", {
-    Default = C3(255,255,255),
-    Callback = function(v)
-        esp.ChamOutline = v
-        for _, obj in pairs(espObjects) do if obj.HL then obj.HL.OutlineColor = v end end
-    end
-})
 
 -- ======== FX TAB ========
 local FXLeft  = Tabs.FX:AddLeftTabbox()
@@ -1286,107 +1096,21 @@ KeyBox:AddKeybind("FollowKeybind", {
         updateHUD()
     end
 })
-KeyBox:AddKeybind("ESPKeybind", {
-    Text = "Toggle ESP", Default = "None", Mode = "Toggle",
+KeyBox:AddKeybind("FLKeybind", {
+    Text = "Fake Lag", Default = "None", Mode = "Toggle",
     Callback = function()
-        esp.Enabled = not esp.Enabled
-        Toggles.ESPEnabled:SetValue(esp.Enabled)
-    end
-})
-
--- ======== HvH TAB ========
-local HvHLeft  = Tabs.HvH:AddLeftTabbox()
-local HvHRight = Tabs.HvH:AddRightTabbox()
-
-local HvHAA = HvHLeft:AddTab("Anti-Aim")
-HvHAA:AddToggle("AAEnabled", {
-    Text = "Anti-Aim", Default = false,
-    Tooltip = "Manipulates your body angles to confuse enemy resolvers",
-    Callback = function(v) hvh.AAEnabled = v end
-})
-HvHAA:AddDropdown("AAMode", {
-    Text = "Mode", Default = "Spin",
-    Values = {"Spin", "Jitter", "FakeDown", "Desync"},
-    Multi = false,
-    Callback = function(v) hvh.AAMode = v end
-})
-HvHAA:AddSlider("AASpeed", {
-    Text = "Spin Speed", Default = 20, Min = 5, Max = 60, Rounding = 1,
-    Suffix = "°/f",
-    Callback = function(v) hvh.AASpeed = v end
-})
-
-local HvHFL = HvHLeft:AddTab("Fake Lag")
-HvHFL:AddToggle("FLEnabled", {
-    Text = "Fake Lag", Default = false,
-    Tooltip = "Desync your position by periodically anchoring the character",
-    Callback = function(v)
-        hvh.FLEnabled = v
-        hvh.flCount = 0
-        if not v then
+        flEnabled = not flEnabled
+        Toggles.FLEnabled:SetValue(flEnabled)
+        if flEnabled then
             local c2 = LP.Character
             local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-            if h2 then h2.Anchored = false end
+            if h2 then flGhostCF = h2.CFrame; flLastUpdate = tick() end
+        else
+            flGhostCF = nil; flRealCF = nil
         end
     end
 })
-HvHFL:AddSlider("FLTicks", {
-    Text = "Lag Ticks", Default = 6, Min = 1, Max = 15, Rounding = 1,
-    Suffix = " ticks",
-    Callback = function(v) hvh.FLTicks = v end
-})
 
-local HvHRes = HvHRight:AddTab("Resolver")
-HvHRes:AddToggle("ResEnabled", {
-    Text = "Resolver", Default = false,
-    Tooltip = "Shoots at a corrected position to counter enemy fake-lag or anti-aim",
-    Callback = function(v) hvh.ResEnabled = v end
-})
-HvHRes:AddDropdown("ResMode", {
-    Text = "Mode", Default = "Backtrack",
-    Values = {"Backtrack", "Velocity"},
-    Multi = false,
-    Tooltip = "Backtrack: aim at a past position | Velocity: aim behind movement direction",
-    Callback = function(v) hvh.ResMode = v end
-})
-HvHRes:AddSlider("BTTicks", {
-    Text = "Backtrack Ticks", Default = 3, Min = 1, Max = 15, Rounding = 1,
-    Suffix = " ticks",
-    Callback = function(v) hvh.BTTicks = v end
-})
-
-local HvHVoid = HvHRight:AddTab("Void")
-HvHVoid:AddToggle("VoidSpam", {
-    Text = "Void Spam", Default = false,
-    Tooltip = "Rapidly flickers between void and your position — extremely hard to register",
-    Callback = function(v)
-        hvh.VoidSpam = v; hvh.voidTimer = 0
-        if not v and hvh.voidActive then
-            local c2 = LP.Character
-            local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-            if h2 then h2.Anchored = false; if hvh.voidOrigin then h2.CFrame = hvh.voidOrigin end end
-            hvh.voidActive = false
-        end
-    end
-})
-HvHVoid:AddToggle("VoidHold", {
-    Text = "Void Hold", Default = false,
-    Tooltip = "Stay in void while toggled — toggle off to return to your position",
-    Callback = function(v)
-        hvh.VoidHold = v
-        if not v and hvh.voidActive then
-            local c2 = LP.Character
-            local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-            if h2 then h2.Anchored = false; if hvh.voidOrigin then h2.CFrame = hvh.voidOrigin end end
-            hvh.voidActive = false
-        end
-    end
-})
-HvHVoid:AddSlider("VoidSpeed", {
-    Text = "Void Speed", Default = 10, Min = 3, Max = 30, Rounding = 1,
-    Suffix = "×/s",
-    Callback = function(v) hvh.VoidDelay = 1 / v end
-})
 
 -- ======== INFINITE JUMP + MB1 TRACKING ========
 UIS.InputBegan:Connect(function(inp, gpe)
@@ -1428,6 +1152,35 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
+-- ======== FAKE LAG (Heartbeat desync) ========
+-- Heartbeat fires after physics; task.defer restores real position before next render.
+-- Server replication reads the ghost CFrame; local display sees the real CFrame.
+RunService.Heartbeat:Connect(function()
+    if not flEnabled or not flGhostCF then return end
+    local char2 = LP.Character; if not char2 then return end
+    local hrp2 = char2:FindFirstChild("HumanoidRootPart"); if not hrp2 then return end
+
+    flRealCF = hrp2.CFrame
+
+    -- optionally drift ghost toward real so it looks like jitter lag, not full freeze
+    if flUpdateRate > 0 then
+        local now = tick()
+        if now - flLastUpdate >= flUpdateRate then
+            flGhostCF  = flRealCF
+            flLastUpdate = now
+        end
+    end
+
+    hrp2.CFrame = flGhostCF  -- push ghost → what server replication reads
+
+    task.defer(function()    -- fires after Heartbeat, before next RenderStepped
+        if not flEnabled or not flRealCF then return end
+        local c3 = LP.Character; if not c3 then return end
+        local h3 = c3:FindFirstChild("HumanoidRootPart"); if not h3 then return end
+        h3.CFrame = flRealCF  -- restore real → what local render + hitbox see
+    end)
+end)
+
 -- ======== RENDER STEPPED ========
 RunService.RenderStepped:Connect(function(dt)
     -- FOV
@@ -1453,121 +1206,49 @@ RunService.RenderStepped:Connect(function(dt)
     end
 
     -- Movement
-    local char = LP.Character; if not char then goto esp_render end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChild("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then goto esp_render end
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChild("Humanoid")
+    repeat
+        if not char then break end
+        if not hrp or not hum or hum.Health <= 0 then break end
 
-    if followEnabled and followTarget and hasBomb() then
-        if not Players:FindFirstChild(followTarget.Name) then
-            followTarget = nil; followEnabled = false
-            Toggles.FollowEnabled:SetValue(false); updateHUD()
-        else
-            local tc = followTarget.Character
-            if tc then
-                local tHRP = tc:FindFirstChild("HumanoidRootPart")
-                if tHRP and (tHRP.Position - hrp.Position).Magnitude <= 300 then
-                    hrp.CFrame = tHRP.CFrame * CFrame.new(0, 0, followDist)
-                    goto esp_render
-                end
-            end
-        end
-    end
-
-    if frozenCheckEnabled then
-        if hrp.Anchored then goto esp_render end
-        if hum.PlatformStand then goto esp_render end
-        for _, v in ipairs(hrp:GetChildren()) do
-            if v:IsA("BodyPosition") or v:IsA("BodyVelocity") then goto esp_render end
-        end
-    end
-    if ladderCheckEnabled and isOnLadder(hum) then goto esp_render end
-
-    local dir = hum.MoveDirection; local speed = 0
-    if hasBomb() then if bombSpeedEnabled then speed = bombSpeed end
-    elseif regularSpeedEnabled then speed = regularSpeed end
-
-    local newCF = hrp.CFrame
-    if speed > 0 and dir.Magnitude > 0 then newCF = newCF + dir * speed * dt end
-    if spinEnabled then spinAngle = (spinAngle + 20 * dt) % (2 * math.pi); newCF = CFrame.new(newCF.Position) * CFrame.Angles(0, spinAngle, 0) end
-    if newCF ~= hrp.CFrame then hrp.CFrame = newCF end
-
-    -- ======== ESP RENDER ========
-    ::esp_render::
-
-    -- ======== POSITION HISTORY (resolver / backtrack) ========
-    for _, pl2 in ipairs(Players:GetPlayers()) do
-        if pl2 == LP then continue end
-        local pc2 = pl2.Character
-        if not pc2 then plrHistory[pl2] = nil; continue end
-        local hrp3 = pc2:FindFirstChild("HumanoidRootPart")
-        if not hrp3 then plrHistory[pl2] = nil; continue end
-        if not plrHistory[pl2] then plrHistory[pl2] = {positions={}} end
-        local ph = plrHistory[pl2]
-        table.insert(ph.positions, 1, {pos=hrp3.Position, t=tick()})
-        if #ph.positions > 20 then table.remove(ph.positions) end
-    end
-
-    -- ======== HvH: ANTI-AIM ========
-    if hvh.AAEnabled and hrp then
-        if hvh.AAMode == "Spin" then
-            hvh.aaAngle = (hvh.aaAngle + hvh.AASpeed) % 360
-            hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, math.rad(hvh.aaAngle), 0)
-        elseif hvh.AAMode == "Jitter" then
-            hvh.aaFlip = not hvh.aaFlip
-            hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, hvh.aaFlip and math.rad(90) or math.rad(-90), 0)
-        elseif hvh.AAMode == "FakeDown" then
-            hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(math.rad(-85), 0, 0)
-        elseif hvh.AAMode == "Desync" then
-            hvh.aaFlip = not hvh.aaFlip
-            hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, hvh.aaFlip and math.rad(180) or 0, 0)
-        end
-    end
-
-    -- ======== HvH: FAKE LAG ========
-    if hrp then
-        if hvh.FLEnabled then
-            hvh.flCount = hvh.flCount + 1
-            local cycle = hvh.FLTicks * 2
-            hrp.Anchored = (hvh.flCount % cycle) < hvh.FLTicks
-        elseif hrp.Anchored and not noclipEnabled and not hvh.voidActive then
-            hrp.Anchored = false
-        end
-    end
-
-    -- ======== HvH: VOID SPAM / VOID HOLD ========
-    if hrp then
-        local wantVoid = hvh.VoidSpam or hvh.VoidHold
-        if wantVoid then
-            if hvh.VoidSpam then
-                hvh.voidTimer = hvh.voidTimer + dt
-                if hvh.voidTimer >= hvh.VoidDelay then
-                    hvh.voidTimer = 0
-                    hvh.voidActive = not hvh.voidActive
-                    if hvh.voidActive then
-                        hvh.voidOrigin = hrp.CFrame
-                        hrp.Anchored = true
-                        hrp.CFrame = CFrame.new(0, -5000, 0)
-                    else
-                        hrp.Anchored = false
-                        if hvh.voidOrigin then hrp.CFrame = hvh.voidOrigin end
+        if followEnabled and followTarget and hasBomb() then
+            if not Players:FindFirstChild(followTarget.Name) then
+                followTarget = nil; followEnabled = false
+                Toggles.FollowEnabled:SetValue(false); updateHUD()
+            else
+                local tc = followTarget.Character
+                if tc then
+                    local tHRP = tc:FindFirstChild("HumanoidRootPart")
+                    if tHRP and (tHRP.Position - hrp.Position).Magnitude <= 300 then
+                        hrp.CFrame = tHRP.CFrame * CFrame.new(0, 0, followDist)
+                        break
                     end
                 end
-            else
-                if not hvh.voidActive then
-                    hvh.voidActive = true
-                    hvh.voidOrigin = hrp.CFrame
-                    hrp.Anchored = true
-                    hrp.CFrame = CFrame.new(0, -5000, 0)
-                end
             end
-        elseif hvh.voidActive then
-            hvh.voidActive = false
-            hrp.Anchored = false
-            if hvh.voidOrigin then hrp.CFrame = hvh.voidOrigin end
-            hvh.voidOrigin = nil
         end
-    end
+
+        if frozenCheckEnabled then
+            if hrp.Anchored then break end
+            if hum.PlatformStand then break end
+            local frozenSkip = false
+            for _, v in ipairs(hrp:GetChildren()) do
+                if v:IsA("BodyPosition") or v:IsA("BodyVelocity") then frozenSkip = true; break end
+            end
+            if frozenSkip then break end
+        end
+        if ladderCheckEnabled and isOnLadder(hum) then break end
+
+        local dir = hum.MoveDirection; local speed = 0
+        if hasBomb() then if bombSpeedEnabled then speed = bombSpeed end
+        elseif regularSpeedEnabled then speed = regularSpeed end
+
+        local newCF = hrp.CFrame
+        if speed > 0 and dir.Magnitude > 0 then newCF = newCF + dir * speed * dt end
+        if spinEnabled then spinAngle = (spinAngle + 20 * dt) % (2 * math.pi); newCF = CFrame.new(newCF.Position) * CFrame.Angles(0, spinAngle, 0) end
+        if newCF ~= hrp.CFrame then hrp.CFrame = newCF end
+    until true
 
     -- target selection for hookmetamethod silent aim + ragebot
     do
@@ -1583,22 +1264,24 @@ RunService.RenderStepped:Connect(function(dt)
             if char2 then saP.FilterDescendantsInstances = { char2 } end
             local best, bestPl, bestD = nil, nil, math.huge
             for _, pl in ipairs(Players:GetPlayers()) do
-                if pl == LP then continue end
-                if sa.TeamCheck and pl.Team == LP.Team then continue end
-                local pc = pl.Character; if not pc then continue end
-                local tgt = pc:FindFirstChild(sa.HitPart) or pc:FindFirstChild("HumanoidRootPart")
-                if not tgt then continue end
-                local h2 = pc:FindFirstChildOfClass("Humanoid")
-                if not h2 or h2.Health <= 0 then continue end
-                local sp, dp = Camera:WorldToViewportPoint(tgt.Position)
-                if dp <= 0 then continue end
-                local sd = (sc2 - Vector2.new(sp.X, sp.Y)).Magnitude
-                if sd > sa.FovRadius then continue end
-                if sa.WallCheck then
-                    local res = workspace:Raycast(Camera.CFrame.Position, tgt.Position - Camera.CFrame.Position, saP)
-                    if not res or not res.Instance:IsDescendantOf(pc) then continue end
-                end
-                if sd < bestD then bestD = sd; best = tgt; bestPl = pl end
+                repeat
+                    if pl == LP then break end
+                    if sa.TeamCheck and pl.Team == LP.Team then break end
+                    local pc = pl.Character; if not pc then break end
+                    local tgt = pc:FindFirstChild(sa.HitPart) or pc:FindFirstChild("HumanoidRootPart")
+                    if not tgt then break end
+                    local h2 = pc:FindFirstChildOfClass("Humanoid")
+                    if not h2 or h2.Health <= 0 then break end
+                    local sp, dp = Camera:WorldToViewportPoint(tgt.Position)
+                    if dp <= 0 then break end
+                    local sd = (sc2 - Vector2.new(sp.X, sp.Y)).Magnitude
+                    if sd > sa.FovRadius then break end
+                    if sa.WallCheck then
+                        local res = workspace:Raycast(Camera.CFrame.Position, tgt.Position - Camera.CFrame.Position, saP)
+                        if not res or not res.Instance:IsDescendantOf(pc) then break end
+                    end
+                    if sd < bestD then bestD = sd; best = tgt; bestPl = pl end
+                until true
             end
             saTarget = best; saTargetPlayer = bestPl
             -- ragebot: auto-fire at locked target with cycle resolver
@@ -1647,99 +1330,6 @@ RunService.RenderStepped:Connect(function(dt)
         end
     end
 
-    for player, obj in pairs(espObjects) do
-        local pchar = player.Character
-        local phum  = pchar and pchar:FindFirstChildOfClass("Humanoid")
-        local alive = phum and phum.Health > 0
-
-        local function hideAll()
-            for _, k in ipairs({"TLH","TLV","TRH","TRV","BLH","BLV","BRH","BRV","BoxFill","NameBG","Name","Dist","HpOutline","HpBG","HpBar","Tracer"}) do
-                if obj[k] then obj[k].Visible = false end
-            end
-        end
-
-        if not esp.Enabled or not alive then hideAll(); continue end
-
-        local phrp = pchar:FindFirstChild("HumanoidRootPart")
-        if not phrp then hideAll(); continue end
-
-        local myHRP = char and char:FindFirstChild("HumanoidRootPart")
-        local dist  = myHRP and (phrp.Position - myHRP.Position).Magnitude or 0
-        if dist > esp.MaxDist then hideAll(); continue end
-
-        local hipH   = phum.HipHeight * 2 + 0.5
-        local topSP, _, topOn = Camera:WorldToViewportPoint(phrp.Position + V3(0, hipH * 0.5, 0))
-        local botSP, botZ     = Camera:WorldToViewportPoint(phrp.Position - V3(0, hipH * 0.5, 0))
-        local topV2  = V2(topSP.X, topSP.Y)
-        local botV2  = V2(botSP.X, botSP.Y)
-
-        if not topOn or botZ <= 0 then hideAll(); continue end
-
-        local boxH = math.abs(topV2.Y - botV2.Y)
-        local boxW = boxH * 0.55
-        local bx   = topV2.X - boxW * 0.5
-        local by   = topV2.Y
-        local hpct = phum.Health / math.max(phum.MaxHealth, 1)
-        local cLen = math.min(boxW, boxH) * 0.22
-
-        -- Corner box (C++ style)
-        if esp.Boxes then
-            local co = esp.BoxColor; local ct = esp.BoxThick
-            local function setLine(ln, x1, y1, x2, y2)
-                ln.Visible=true; ln.From=V2(x1,y1); ln.To=V2(x2,y2); ln.Color=co; ln.Thickness=ct
-            end
-            setLine(obj.TLH, bx,      by,      bx+cLen,      by)
-            setLine(obj.TLV, bx,      by,      bx,           by+cLen)
-            setLine(obj.TRH, bx+boxW, by,      bx+boxW-cLen, by)
-            setLine(obj.TRV, bx+boxW, by,      bx+boxW,      by+cLen)
-            setLine(obj.BLH, bx,      by+boxH, bx+cLen,      by+boxH)
-            setLine(obj.BLV, bx,      by+boxH, bx,           by+boxH-cLen)
-            setLine(obj.BRH, bx+boxW, by+boxH, bx+boxW-cLen, by+boxH)
-            setLine(obj.BRV, bx+boxW, by+boxH, bx+boxW,      by+boxH-cLen)
-        else
-            for _, k in ipairs({"TLH","TLV","TRH","TRV","BLH","BLV","BRH","BRV"}) do obj[k].Visible=false end
-        end
-
-        -- Filled box
-        if esp.FilledBoxes then
-            obj.BoxFill.Visible=true; obj.BoxFill.Position=V2(bx,by)
-            obj.BoxFill.Size=V2(boxW,boxH); obj.BoxFill.Color=esp.FilledColor
-            obj.BoxFill.Transparency=1-esp.FilledAlpha
-        else obj.BoxFill.Visible=false end
-
-        -- Name tag with black panel
-        if esp.Names then
-            local nameY = by - esp.TextSize - 4
-            obj.NameBG.Visible=true; obj.NameBG.Position=V2(bx, nameY-2)
-            obj.NameBG.Size=V2(boxW, esp.TextSize+4); obj.NameBG.Color=Color3.new(0,0,0); obj.NameBG.Transparency=0.3
-            obj.Name.Visible=true; obj.Name.Position=V2(topV2.X, nameY)
-            obj.Name.Text=player.DisplayName; obj.Name.Color=esp.NameColor
-            obj.Name.Size=esp.TextSize; obj.Name.Font=Drawing.Fonts.Plex
-        else obj.NameBG.Visible=false; obj.Name.Visible=false end
-
-        -- Distance
-        if esp.Distance then
-            obj.Dist.Visible=true; obj.Dist.Position=V2(topV2.X, by+boxH+3)
-            obj.Dist.Text=string.format("%.0f m", dist); obj.Dist.Color=C3(185,170,150)
-            obj.Dist.Size=esp.TextSize-3; obj.Dist.Font=Drawing.Fonts.Plex
-        else obj.Dist.Visible=false end
-
-        -- Health bar with outline
-        if esp.Health then
-            local barW=3; local barX=bx-barW-3; local filledH=boxH*hpct
-            obj.HpOutline.Visible=true; obj.HpOutline.Position=V2(barX-1,by-1); obj.HpOutline.Size=V2(barW+2,boxH+2); obj.HpOutline.Color=Color3.new(0,0,0)
-            obj.HpBG.Visible=true; obj.HpBG.Position=V2(barX,by); obj.HpBG.Size=V2(barW,boxH); obj.HpBG.Color=C3(25,10,10)
-            obj.HpBar.Visible=true; obj.HpBar.Position=V2(barX,by+boxH-filledH); obj.HpBar.Size=V2(barW,filledH)
-            obj.HpBar.Color=C3(math.floor((1-hpct)*220), math.floor(hpct*200+55), 40)
-        else obj.HpOutline.Visible=false; obj.HpBG.Visible=false; obj.HpBar.Visible=false end
-
-        -- Tracer
-        if esp.Tracers then
-            local vp2 = Camera.ViewportSize
-            obj.Tracer.Visible=true; obj.Tracer.From=V2(vp2.X*0.5, vp2.Y)
-            obj.Tracer.To=botV2; obj.Tracer.Color=esp.TracerColor; obj.Tracer.Thickness=1
-        else obj.Tracer.Visible=false end
-    end
 end)
 
 -- ======== SILENT AIM (hookmetamethod Mouse.Hit/Target intercept) ========
@@ -1749,22 +1339,7 @@ pcall(function()
     __indexHook = hookmetamethod(game, "__index", function(t, k)
         if t:IsA("Mouse") and sa.Enabled and saTarget then
             if k == "Hit" then
-                local pos
-                if hvh.ResEnabled and saTargetPlayer then
-                    local h = plrHistory[saTargetPlayer]
-                    if h and #h.positions > 0 then
-                        if hvh.ResMode == "Backtrack" then
-                            local bt = math.min(hvh.BTTicks, #h.positions)
-                            pos = h.positions[bt].pos
-                        elseif hvh.ResMode == "Velocity" and #h.positions >= 3 then
-                            local vel = (h.positions[1].pos - h.positions[3].pos) * 30
-                            pos = saTarget.Position + vel * 0.05
-                        end
-                    end
-                end
-                if not pos then
-                    pos = saTarget.Position + (saTarget.Velocity * sa.Prediction)
-                end
+                local pos = saTarget.Position + (saTarget.Velocity * sa.Prediction)
                 -- apply cycle resolver angular offset
                 if rb.Enabled and rbCycle.Enabled and rbCycleOffset ~= 0 then
                     local r = 0.5
