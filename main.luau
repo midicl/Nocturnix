@@ -1,4 +1,3 @@
---!nocheck
 -- Runtime: Roblox executor (Synapse X / KRNL / Fluxus etc.)
 -- Lib: LinoriaLib (violin-suzutsuki)
 
@@ -787,6 +786,9 @@ local function safeLoad(url)
     assert(fn, "loadstring failed for: " .. url .. " — " .. tostring(err))
     return fn()
 end
+
+if not ProtectGui then ProtectGui = function() end end
+if not gethui    then gethui    = function() return game:GetService("CoreGui") end end
 
 local repo = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/"
 local Library      = safeLoad(repo .. "Library.lua")
