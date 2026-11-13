@@ -675,8 +675,10 @@ if not gethui    then gethui    = function() return game:GetService("CoreGui") e
 
 local repo = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/"
 local Library      = safeLoad(repo .. "Library.lua")
-local ThemeManager = safeLoad(repo .. "addons/ThemeManager.lua")
-local SaveManager  = safeLoad(repo .. "addons/SaveManager.lua")
+local ThemeManager; pcall(function() ThemeManager = safeLoad(repo .. "addons/ThemeManager.lua") end)
+local SaveManager;  pcall(function() SaveManager  = safeLoad(repo .. "addons/SaveManager.lua")  end)
+if not ThemeManager then ThemeManager = { SetLibrary = function() end, ApplyToTab = function() end } end
+if not SaveManager  then SaveManager  = { SetLibrary = function() end, AddToTab = function() end, SetFolder = function() end, SetIgnoreIndexes = function() end } end
 
 local Window = Library:CreateWindow({
     Title       = "Timebomb Duels",
@@ -1036,17 +1038,17 @@ FXPerf:AddToggle("ShowHUD", {
 })
 
 -- ======== SETTINGS TAB ========
-local SettLeft  = Tabs.Settings:AddLeftTabbox()
-local SettRight = Tabs.Settings:AddRightTabbox()
+-- ThemeManager/SaveManager need a Window tab (AddLeftGroupbox exists there),
+-- not a Tabbox subtab. Pass Tabs.Settings directly.
+local SettLeft = Tabs.Settings:AddLeftTabbox()
 
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 SaveManager:SetFolder("TimebombDuels")
-ThemeManager:ApplyToTab(SettLeft:AddTab("Theme"))
-SaveManager:AddToTab(SettRight:AddTab("Config"))
-SaveManager:SetIgnoreIndexes({})
+pcall(function() ThemeManager:ApplyToTab(Tabs.Settings) end)
+pcall(function() SaveManager:AddToTab(Tabs.Settings) end)
+pcall(function() SaveManager:SetIgnoreIndexes({}) end)
 
--- Keys box in settings
 local KeyBox = SettLeft:AddTab("Keys")
 KeyBox:AddKeybind("SpeedKeybind", {
     Text = "Speed Boost", Default = "None", Mode = "Toggle",
