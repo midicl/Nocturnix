@@ -90,6 +90,7 @@ local noclipEnabled       = false
 local followEnabled       = false; local followTarget = nil; local followDist = 3
 local headlessEnabled     = false; local korbloxEnabled = false
 local trailEnabled        = false; local trailColorKey  = "Purple"
+local _speedBV            = nil
 local rainEnabled         = false; local thunderEnabled = false
 local rainObj             = nil;   local rainConn      = nil; local thunderConn = nil
 local fovEnabled          = false; local customFOV     = 70
@@ -893,17 +894,25 @@ RunService.Heartbeat:Connect(function(dt)
 
     if hum and hrp then
         local frozen = frozenCheckEnabled and (hrp.Anchored or hum.PlatformStand)
+        local spd = 0
         if not frozen then
-            local spd = 0
             if regularSpeedEnabled then spd = regularSpeed end
             if bombSpeedEnabled and hasBomb() then spd = bombSpeed end
-            if spd > 0 then
-                local dir = hum.MoveDirection
-                if dir.Magnitude > 0 then
-                    hrp.CFrame = hrp.CFrame + dir * spd * dt
-                end
-            end
         end
+        if spd > 0 then
+            local dir = hum.MoveDirection
+            if not _speedBV or not _speedBV.Parent then
+                _speedBV = Instance.new("BodyVelocity")
+                _speedBV.MaxForce = Vector3.new(1e5, 0, 1e5)
+                _speedBV.P = 1e4
+                _speedBV.Parent = hrp
+            end
+            _speedBV.Velocity = dir * spd
+        else
+            if _speedBV then _speedBV:Destroy(); _speedBV = nil end
+        end
+    else
+        if _speedBV then _speedBV:Destroy(); _speedBV = nil end
     end
 
     if infiniteJumpEnabled and hum and UIS:IsKeyDown(Enum.KeyCode.Space) then
