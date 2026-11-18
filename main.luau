@@ -1,5 +1,5 @@
 -- Runtime: Roblox executor (Synapse X / KRNL / Fluxus etc.)
--- Lib: LinoriaLib (violin-suzutsuki)
+-- Lib: NextUI (diser.me/nextui)
 
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -579,114 +579,48 @@ end
 
 
 -- ======== LIBRARY LOAD ========
--- universal http getter — pcall-based so nil globals don't crash the chain
--- covers: Synapse X, KRNL, Fluxus, Solara, Wave, Hydrogen, Comet, Delta
-local function httpGet(url)
-    local attempts = {
-        function() return syn.request({ Url = url, Method = "GET" }).Body end,
-        function() return http.request({ Url = url, Method = "GET" }).Body end,
-        function() return http_request({ Url = url, Method = "GET" }).Body end,
-        function() return request({ Url = url, Method = "GET" }).Body end,
-        function() return (fluxus or fluxus_request)({ Url = url, Method = "GET" }).Body end,
-        function() return game:HttpGet(url) end,
-        function() return HttpGet(url) end,
-    }
-    for _, fn in ipairs(attempts) do
-        local ok, result = pcall(fn)
-        if ok and type(result) == "string" and #result > 10 then
-            return result
-        end
-    end
-    error("[TB] No working HTTP method — executor may not support web requests")
-end
+local NextUI = loadstring(game:HttpGet("https://diser.me/nextui/source.lua"))()
+NextUI.ConfigFolder = "TimebombDuels"
 
-local function safeLoad(url)
-    local body = httpGet(url)
-    assert(type(body) == "string" and #body > 0, "Empty response from: " .. url)
-    local fn, err = loadstring(body)
-    assert(fn, "loadstring failed for: " .. url .. " — " .. tostring(err))
-    return fn()
-end
-
-if not ProtectGui then ProtectGui = function() end end
-if not gethui    then gethui    = function() return game:GetService("CoreGui") end end
-
-local repo = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/"
-local Library      = safeLoad(repo .. "Library.lua")
-local ThemeManager; pcall(function() ThemeManager = safeLoad(repo .. "addons/ThemeManager.lua") end)
-local SaveManager;  pcall(function() SaveManager  = safeLoad(repo .. "addons/SaveManager.lua")  end)
-if not ThemeManager then ThemeManager = { SetLibrary = function() end, ApplyToTab = function() end } end
-if not SaveManager  then SaveManager  = { SetLibrary = function() end, AddToTab = function() end, SetFolder = function() end, SetIgnoreIndexes = function() end } end
-
-local Window = Library:CreateWindow({
-    Title       = "Timebomb Duels",
-    Center      = true,
-    AutoShow    = true,
-    TabPadding  = 8,
-    MenuFadeTime = 0.2,
+local Window = NextUI:CreateWindow({
+    Title    = "Timebomb",
+    SubTitle = "Duels",
+    Theme    = "Amethyst",
+    Size     = Vector2.new(820, 520),
+    Stars    = true,
 })
-Library.AccentColor = C3(165, 95, 255)
-
-local Tabs = {
-    Speed    = Window:AddTab("Speed"),
-    Combat   = Window:AddTab("Combat"),
-    Char     = Window:AddTab("Character"),
-    Visuals  = Window:AddTab("Visuals"),
-    FX       = Window:AddTab("FX"),
-    Settings = Window:AddTab("Settings"),
-}
 
 -- ======== SPEED TAB ========
-local SpdLeft  = Tabs.Speed:AddLeftTabbox()
-local SpdRight = Tabs.Speed:AddRightTabbox()
+local SpeedTab = Window:AddTab("Speed", "zap")
 
-local SpdReg = SpdLeft:AddTab("Regular")
-SpdReg:AddToggle("SpeedEnabled", {
-    Text = "Speed Boost", Default = false,
-    Callback = function(v) regularSpeedEnabled = v; updateHUD() end
-})
-SpdReg:AddSlider("SpeedValue", {
-    Text = "Speed", Default = 20, Min = 1, Max = 100, Rounding = 1,
-    Callback = function(v) regularSpeed = v end
-})
-SpdReg:AddToggle("LadderCheck", {
-    Text = "Ladder Check", Default = true,
-    Callback = function(v) ladderCheckEnabled = v end
-})
-SpdReg:AddToggle("FrozenCheck", {
-    Text = "Frozen Check", Default = true,
-    Callback = function(v) frozenCheckEnabled = v end
-})
+local RegCard = SpeedTab:AddSection({Title = "Regular Speed", Icon = "zap"})
+RegCard:AddToggle({Title = "Speed Boost", Flag = "SpeedEnabled", Default = false,
+    Callback = function(v) regularSpeedEnabled = v; updateHUD() end})
+RegCard:AddSlider({Title = "Speed", Flag = "SpeedValue", Default = 20, Min = 1, Max = 100,
+    Callback = function(v) regularSpeed = v end})
+RegCard:AddToggle({Title = "Ladder Check", Flag = "LadderCheck", Default = true,
+    Callback = function(v) ladderCheckEnabled = v end})
+RegCard:AddToggle({Title = "Frozen Check", Flag = "FrozenCheck", Default = true,
+    Callback = function(v) frozenCheckEnabled = v end})
 
-local SpdBomb = SpdLeft:AddTab("Bomb")
-SpdBomb:AddToggle("BombSpeedEnabled", {
-    Text = "Bomb Speed", Default = false,
-    Callback = function(v) bombSpeedEnabled = v; updateHUD() end
-})
-SpdBomb:AddSlider("BombSpeedValue", {
-    Text = "Bomb Speed", Default = 25, Min = 1, Max = 100, Rounding = 1,
-    Callback = function(v) bombSpeed = v end
-})
+local BombSub = SpeedTab:AddSubTab("Bomb", "bomb")
+local BombCard = BombSub:AddSection({Title = "Bomb Speed", Icon = "bomb"})
+BombCard:AddToggle({Title = "Bomb Speed", Flag = "BombSpeedEnabled", Default = false,
+    Callback = function(v) bombSpeedEnabled = v; updateHUD() end})
+BombCard:AddSlider({Title = "Bomb Speed", Flag = "BombSpeedValue", Default = 25, Min = 1, Max = 100,
+    Callback = function(v) bombSpeed = v end})
 
 -- ======== COMBAT TAB ========
-local CombatLeft  = Tabs.Combat:AddLeftTabbox()
-local CombatRight = Tabs.Combat:AddRightTabbox()
+local CombatTab = Window:AddTab("Combat", "swords")
 
-local CombatBot = CombatLeft:AddTab("Movement")
-CombatBot:AddToggle("SpinEnabled", {
-    Text = "Spin Bot", Default = false,
-    Callback = function(v) spinEnabled = v; updateHUD() end
-})
-CombatBot:AddToggle("InfJump", {
-    Text = "Infinite Jump", Default = false,
-    Callback = function(v) infiniteJumpEnabled = v; updateHUD() end
-})
-CombatBot:AddToggle("NoclipEnabled", {
-    Text = "Noclip", Default = false,
-    Callback = function(v) noclipEnabled = v; updateHUD() end
-})
-CombatBot:AddToggle("InstantRespawn", {
-    Text = "Instant Respawn", Default = false,
+local MovCard = CombatTab:AddSection({Title = "Movement", Icon = "move"})
+MovCard:AddToggle({Title = "Spin Bot", Flag = "SpinEnabled", Default = false,
+    Callback = function(v) spinEnabled = v; updateHUD() end})
+MovCard:AddToggle({Title = "Infinite Jump", Flag = "InfJump", Default = false,
+    Callback = function(v) infiniteJumpEnabled = v; updateHUD() end})
+MovCard:AddToggle({Title = "Noclip", Flag = "NoclipEnabled", Default = false,
+    Callback = function(v) noclipEnabled = v; updateHUD() end})
+MovCard:AddToggle({Title = "Instant Respawn", Flag = "InstantRespawn", Default = false,
     Callback = function(v)
         instantRespawn = v
         if v then
@@ -696,31 +630,22 @@ CombatBot:AddToggle("InstantRespawn", {
                 if hum then hum.Died:Connect(function() task.wait(0.1); LP:LoadCharacter() end) end
             end
         end
-    end
-})
+    end})
 
-
-local CombatFollow = CombatRight:AddTab("Follow")
+local FollowSub = CombatTab:AddSubTab("Follow", "user")
 local playerOpts = {}
 for _, p in ipairs(Players:GetPlayers()) do if p ~= LP then playerOpts[#playerOpts+1] = p.Name end end
 if #playerOpts == 0 then playerOpts = {"(no players)"} end
 
-CombatFollow:AddDropdown("FollowTarget", {
-    Text = "Target", Default = playerOpts[1], Values = playerOpts, Multi = false,
-    Callback = function(v) followTarget = Players:FindFirstChild(v) end
-})
-CombatFollow:AddToggle("FollowEnabled", {
-    Text = "Follow When Bomb", Default = false,
-    Callback = function(v) followEnabled = v; updateHUD() end
-})
-CombatFollow:AddSlider("FollowDist", {
-    Text = "Follow Distance", Default = 3, Min = 0, Max = 15, Rounding = 1,
-    Suffix = " studs",
-    Callback = function(v) followDist = v end
-})
-CombatFollow:AddButton({
-    Text = "Set Nearest Target",
-    Func = function()
+local FollowCard = FollowSub:AddSection({Title = "Follow", Icon = "user"})
+FollowCard:AddDropdown({Title = "Target", Flag = "FollowTarget", Default = playerOpts[1], Values = playerOpts,
+    Callback = function(v) followTarget = Players:FindFirstChild(v) end})
+FollowCard:AddToggle({Title = "Follow When Bomb", Flag = "FollowEnabled", Default = false,
+    Callback = function(v) followEnabled = v; updateHUD() end})
+FollowCard:AddSlider({Title = "Follow Distance", Flag = "FollowDist", Default = 3, Min = 0, Max = 15,
+    Suffix = " studs", Callback = function(v) followDist = v end})
+FollowCard:AddButton({Title = "Set Nearest Target",
+    Callback = function()
         local char = LP.Character; if not char then return end
         local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
         local best, bd = nil, math.huge
@@ -730,226 +655,128 @@ CombatFollow:AddButton({
                 if ph then local d = (ph.Position - hrp.Position).Magnitude; if d < bd then bd = d; best = p end end
             end
         end
-        if best then followTarget = best; Library:Notify("Follow: " .. best.Name, 2) end
-    end
-})
-
+        if best then followTarget = best; NextUI:Info("Follow", best.Name, 2) end
+    end})
 
 -- ======== CHARACTER TAB ========
-local CharLeft  = Tabs.Char:AddLeftTabbox()
-local CharRight = Tabs.Char:AddRightTabbox()
+local CharTab = Window:AddTab("Character", "user")
 
-local CharApp = CharLeft:AddTab("Look")
-CharApp:AddToggle("HeadlessEnabled", {
-    Text = "Client Headless", Default = false,
-    Callback = function(v) headlessEnabled = v; applyHeadless(v) end
-})
-CharApp:AddToggle("KorbloxEnabled", {
-    Text = "Client Korblox", Default = false,
-    Callback = function(v) korbloxEnabled = v; applyKorblox(v) end
-})
-CharApp:AddToggle("HaloEnabled", {
-    Text = "Halo", Default = false,
-    Callback = function(v)
-        haloEnabled = v
-        if v then haloObj = makeHalo(LP.Character) else clearHalo() end
-    end
-})
-CharApp:AddToggle("TrailEnabled", {
-    Text = "Foot Trails", Default = false,
-    Callback = function(v) trailEnabled = v; applyTrails(v) end
-})
-CharApp:AddDropdown("TrailColor", {
-    Text = "Trail Color", Default = "Purple",
-    Values = {"Purple","Cyan","Fire","Ice","Gold","White"}, Multi = false,
-    Callback = function(v) trailColorKey = v; if trailEnabled then applyTrails(true) end end
-})
+local LookCard = CharTab:AddSection({Title = "Appearance", Icon = "user"})
+LookCard:AddToggle({Title = "Client Headless", Flag = "HeadlessEnabled", Default = false,
+    Callback = function(v) headlessEnabled = v; applyHeadless(v) end})
+LookCard:AddToggle({Title = "Client Korblox", Flag = "KorbloxEnabled", Default = false,
+    Callback = function(v) korbloxEnabled = v; applyKorblox(v) end})
+LookCard:AddToggle({Title = "Halo", Flag = "HaloEnabled", Default = false,
+    Callback = function(v) haloEnabled = v; if v then haloObj = makeHalo(LP.Character) else clearHalo() end end})
+LookCard:AddToggle({Title = "Foot Trails", Flag = "TrailEnabled", Default = false,
+    Callback = function(v) trailEnabled = v; applyTrails(v) end})
+LookCard:AddDropdown({Title = "Trail Color", Flag = "TrailColor", Default = "Purple",
+    Values = {"Purple","Cyan","Fire","Ice","Gold","White"},
+    Callback = function(v) trailColorKey = v; if trailEnabled then applyTrails(true) end end})
 
-local CharAura = CharRight:AddTab("Aura")
-CharAura:AddDropdown("AuraStyle", {
-    Text = "Aura Style", Default = "None",
+local AuraSub = CharTab:AddSubTab("Aura", "sparkles")
+local AuraCard = AuraSub:AddSection({Title = "Aura", Icon = "sparkles"})
+AuraCard:AddDropdown({Title = "Aura Style", Flag = "AuraStyle", Default = "None",
     Values = {"None","Purple Storm","Blue Flames","Galaxy","Ice Crystals","Shadow","Golden Divine","Lightning","Crimson","Sakura","Neon Rainbow"},
-    Multi = false,
-    Callback = function(v) auraType = v; applyAura(LP.Character, auraType) end
-})
-CharAura:AddDropdown("WingsStyle", {
-    Text = "Wings Style", Default = "None",
-    Values = {"None","Angel","Demon","Butterfly"}, Multi = false,
-    Callback = function(v) wingsStyle = v; applyWings(LP.Character, wingsStyle) end
-})
+    Callback = function(v) auraType = v; applyAura(LP.Character, auraType) end})
+AuraCard:AddDropdown({Title = "Wings Style", Flag = "WingsStyle", Default = "None",
+    Values = {"None","Angel","Demon","Butterfly"},
+    Callback = function(v) wingsStyle = v; applyWings(LP.Character, wingsStyle) end})
 
 -- ======== VISUALS TAB ========
-local VisLeft  = Tabs.Visuals:AddLeftTabbox()
-local VisRight = Tabs.Visuals:AddRightTabbox()
+local VisTab = Window:AddTab("Visuals", "eye")
 
-local VisCam = VisLeft:AddTab("Camera")
-VisCam:AddToggle("FOVEnabled", {
-    Text = "Custom FOV", Default = false,
-    Callback = function(v) fovEnabled = v; if not v then workspace.CurrentCamera.FieldOfView = 70 end end
-})
-VisCam:AddSlider("FOVValue", {
-    Text = "Field of View", Default = 70, Min = 30, Max = 120, Rounding = 1,
-    Suffix = "°",
-    Callback = function(v) customFOV = v; if fovEnabled then workspace.CurrentCamera.FieldOfView = v end end
-})
-VisCam:AddDropdown("AspectRatio", {
-    Text = "Aspect Ratio", Default = "16:9",
-    Values = {"16:9","21:9","4:3","2.35:1","1:1"}, Multi = false,
-    Callback = function(v) setAspectRatio(v) end
-})
-VisCam:AddDropdown("ShaderPreset", {
-    Text = "Shader", Default = "None",
-    Values = {"None","Cinematic","Vibrant","Dark Film","Neon Glow","Warm Sunset","Cold Blue","Depth"}, Multi = false,
-    Callback = function(v) shaderActive = v; applyShader(v) end
-})
+local CamCard = VisTab:AddSection({Title = "Camera", Icon = "camera"})
+CamCard:AddToggle({Title = "Custom FOV", Flag = "FOVEnabled", Default = false,
+    Callback = function(v) fovEnabled = v; if not v and not arFOV then workspace.CurrentCamera.FieldOfView = 70 end end})
+CamCard:AddSlider({Title = "Field of View", Flag = "FOVValue", Default = 70, Min = 30, Max = 120, Suffix = "°",
+    Callback = function(v) customFOV = v; if fovEnabled then workspace.CurrentCamera.FieldOfView = v end end})
+CamCard:AddDropdown({Title = "Aspect Ratio", Flag = "AspectRatio", Default = "16:9",
+    Values = {"16:9","21:9","4:3","2.35:1","1:1"},
+    Callback = function(v) setAspectRatio(v) end})
+CamCard:AddDropdown({Title = "Shader", Flag = "ShaderPreset", Default = "None",
+    Values = {"None","Cinematic","Vibrant","Dark Film","Neon Glow","Warm Sunset","Cold Blue","Depth"},
+    Callback = function(v) shaderActive = v; applyShader(v) end})
 
 local sceneList = {}; for n in pairs(SCENE_PRESETS) do sceneList[#sceneList+1] = n end; table.sort(sceneList)
 local weatherList = {}; for n in pairs(WEATHER_PRESETS) do weatherList[#weatherList+1] = n end; table.sort(weatherList)
 
-local VisWorld = VisRight:AddTab("World")
-VisWorld:AddDropdown("ScenePreset", {
-    Text = "Scene Preset", Default = sceneList[1], Values = sceneList, Multi = false,
-    Callback = function(v) if SCENE_PRESETS[v] then applyLightPreset(SCENE_PRESETS[v]) end end
-})
-VisWorld:AddDropdown("WeatherPreset", {
-    Text = "Weather Preset", Default = weatherList[1], Values = weatherList, Multi = false,
-    Callback = function(v) if WEATHER_PRESETS[v] then applyLightPreset(WEATHER_PRESETS[v]) end end
-})
-VisWorld:AddButton({
-    Text = "Reset Lighting",
-    Func = function()
+local WorldSub = VisTab:AddSubTab("World", "sun")
+local WorldCard = WorldSub:AddSection({Title = "World", Icon = "sun"})
+WorldCard:AddDropdown({Title = "Scene Preset", Flag = "ScenePreset", Default = sceneList[1], Values = sceneList,
+    Callback = function(v) if SCENE_PRESETS[v] then applyLightPreset(SCENE_PRESETS[v]) end end})
+WorldCard:AddDropdown({Title = "Weather Preset", Flag = "WeatherPreset", Default = weatherList[1], Values = weatherList,
+    Callback = function(v) if WEATHER_PRESETS[v] then applyLightPreset(WEATHER_PRESETS[v]) end end})
+WorldCard:AddButton({Title = "Reset Lighting",
+    Callback = function()
         Lighting.Brightness = origLight.Brightness; Lighting.Ambient = origLight.Ambient
         Lighting.OutdoorAmbient = origLight.OutdoorAmbient; Lighting.FogEnd = origLight.FogEnd
         Lighting.FogColor = origLight.FogColor; Lighting.ClockTime = origLight.ClockTime
-        clearShaders()
-        Library:Notify("Lighting reset", 2)
-    end
-})
-
+        clearShaders(); NextUI:Info("Lighting", "Reset to default", 2)
+    end})
 
 -- ======== FX TAB ========
-local FXLeft  = Tabs.FX:AddLeftTabbox()
-local FXRight = Tabs.FX:AddRightTabbox()
+local FXTab = Window:AddTab("FX", "sparkles")
 
-local FXWeather = FXLeft:AddTab("Weather")
-FXWeather:AddToggle("RainEnabled", {
-    Text = "Rain", Default = false,
-    Callback = function(v)
-        rainEnabled = v
-        local rate = Toggles.RainEnabled and Options.RainRate and Options.RainRate.Value or 1500
-        setRain(v, rate)
-    end
-})
-FXWeather:AddSlider("RainRate", {
-    Text = "Rain Intensity", Default = 1500, Min = 200, Max = 3000, Rounding = 100,
-    Callback = function(v) if rainEnabled then updateRainRate(v) end end
-})
-FXWeather:AddToggle("ThunderEnabled", {
-    Text = "Thunder", Default = false,
-    Callback = function(v) thunderEnabled = v; setThunder(v) end
-})
+local WeatherCard = FXTab:AddSection({Title = "Weather", Icon = "cloud-rain"})
+WeatherCard:AddToggle({Title = "Rain", Flag = "RainEnabled", Default = false,
+    Callback = function(v) rainEnabled = v; setRain(v, NextUI.Flags.RainRate or 1500) end})
+WeatherCard:AddSlider({Title = "Rain Intensity", Flag = "RainRate", Default = 1500, Min = 200, Max = 3000, Increment = 100,
+    Callback = function(v) if rainEnabled then updateRainRate(v) end end})
+WeatherCard:AddToggle({Title = "Thunder", Flag = "ThunderEnabled", Default = false,
+    Callback = function(v) thunderEnabled = v; setThunder(v) end})
 
-local FXPerf = FXRight:AddTab("Performance")
-FXPerf:AddToggle("NoParticles", {
-    Text = "Disable Particles", Default = false,
+local PerfSub = FXTab:AddSubTab("Performance", "cpu")
+local PerfCard = PerfSub:AddSection({Title = "Performance", Icon = "cpu"})
+PerfCard:AddToggle({Title = "Disable Particles", Flag = "NoParticles", Default = false,
     Callback = function(v)
         for _, d in ipairs(workspace:GetDescendants()) do
             if (d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam"))
                and d.Name ~= "_RainFX" and d.Name ~= "_FootTrail"
                and not d:GetAttribute("_AuraFX") then d.Enabled = not v end
         end
-    end
-})
-FXPerf:AddToggle("NoLights", {
-    Text = "Disable Lights", Default = false,
+    end})
+PerfCard:AddToggle({Title = "Disable Lights", Flag = "NoLights", Default = false,
     Callback = function(v)
         for _, d in ipairs(workspace:GetDescendants()) do
             if d:IsA("PointLight") or d:IsA("SpotLight") or d:IsA("SurfaceLight") then d.Enabled = not v end
         end
-    end
-})
-FXPerf:AddToggle("NoPostFX", {
-    Text = "Disable Post FX", Default = false,
+    end})
+PerfCard:AddToggle({Title = "Disable Post FX", Flag = "NoPostFX", Default = false,
     Callback = function(v)
         for _, d in ipairs(Lighting:GetChildren()) do
             if d:IsA("PostEffect") and not d:GetAttribute("_TB") then d.Enabled = not v end
         end
-    end
-})
-FXPerf:AddToggle("NoTextures", {
-    Text = "Disable Textures", Default = false,
+    end})
+PerfCard:AddToggle({Title = "Disable Textures", Flag = "NoTextures", Default = false,
     Callback = function(v)
         for _, d in ipairs(workspace:GetDescendants()) do
             if d:IsA("Texture") or d:IsA("Decal") then d.Transparency = v and 1 or 0 end
         end
-    end
-})
-FXPerf:AddToggle("ShowHUD", {
-    Text = "Show Status HUD", Default = true,
-    Callback = function(v) hudF.Visible = v end
-})
+    end})
+PerfCard:AddToggle({Title = "Show Status HUD", Flag = "ShowHUD", Default = true,
+    Callback = function(v) hudF.Visible = v end})
 
 -- ======== SETTINGS TAB ========
--- ThemeManager/SaveManager need a Window tab (AddLeftGroupbox exists there),
--- not a Tabbox subtab. Pass Tabs.Settings directly.
-local SettLeft = Tabs.Settings:AddLeftTabbox()
+local SettTab = Window:AddTab("Settings", "settings")
 
-ThemeManager:SetLibrary(Library)
-SaveManager:SetLibrary(Library)
-SaveManager:SetFolder("TimebombDuels")
-pcall(function() ThemeManager:ApplyToTab(Tabs.Settings) end)
-pcall(function() SaveManager:AddToTab(Tabs.Settings) end)
-pcall(function() SaveManager:SetIgnoreIndexes({}) end)
+local ConfCard = SettTab:AddSection({Title = "Config", Icon = "save"})
+ConfCard:AddConfigManager()
 
-local KeyBox = SettLeft:AddTab("Keys")
-KeyBox:AddKeybind("SpeedKeybind", {
-    Text = "Speed Boost", Default = "None", Mode = "Toggle",
-    Callback = function()
-        regularSpeedEnabled = not regularSpeedEnabled
-        Toggles.SpeedEnabled:SetValue(regularSpeedEnabled)
-        updateHUD()
-    end
-})
-KeyBox:AddKeybind("BombSpeedKeybind", {
-    Text = "Bomb Speed", Default = "None", Mode = "Toggle",
-    Callback = function()
-        bombSpeedEnabled = not bombSpeedEnabled
-        Toggles.BombSpeedEnabled:SetValue(bombSpeedEnabled)
-        updateHUD()
-    end
-})
-KeyBox:AddKeybind("SpinKeybind", {
-    Text = "Spin Bot", Default = "None", Mode = "Toggle",
-    Callback = function()
-        spinEnabled = not spinEnabled
-        Toggles.SpinEnabled:SetValue(spinEnabled)
-        updateHUD()
-    end
-})
-KeyBox:AddKeybind("InfJumpKeybind", {
-    Text = "Infinite Jump", Default = "None", Mode = "Toggle",
-    Callback = function()
-        infiniteJumpEnabled = not infiniteJumpEnabled
-        Toggles.InfJump:SetValue(infiniteJumpEnabled)
-        updateHUD()
-    end
-})
-KeyBox:AddKeybind("NoclipKeybind", {
-    Text = "Noclip", Default = "None", Mode = "Toggle",
-    Callback = function()
-        noclipEnabled = not noclipEnabled
-        Toggles.NoclipEnabled:SetValue(noclipEnabled)
-        updateHUD()
-    end
-})
-KeyBox:AddKeybind("FollowKeybind", {
-    Text = "Follow Target", Default = "None", Mode = "Toggle",
-    Callback = function()
-        followEnabled = not followEnabled
-        Toggles.FollowEnabled:SetValue(followEnabled)
-        updateHUD()
-    end
-})
+local KeysSub = SettTab:AddSubTab("Keys", "keyboard")
+local KeysCard = KeysSub:AddSection({Title = "Keybinds", Icon = "keyboard"})
+KeysCard:AddKeybind({Title = "Speed Boost", Flag = "SpeedKeybind", Mode = "Toggle",
+    Callback = function(v) regularSpeedEnabled = v; NextUI.Options.SpeedEnabled:Set(v); updateHUD() end})
+KeysCard:AddKeybind({Title = "Bomb Speed", Flag = "BombSpeedKeybind", Mode = "Toggle",
+    Callback = function(v) bombSpeedEnabled = v; NextUI.Options.BombSpeedEnabled:Set(v); updateHUD() end})
+KeysCard:AddKeybind({Title = "Spin Bot", Flag = "SpinKeybind", Mode = "Toggle",
+    Callback = function(v) spinEnabled = v; NextUI.Options.SpinEnabled:Set(v); updateHUD() end})
+KeysCard:AddKeybind({Title = "Infinite Jump", Flag = "InfJumpKeybind", Mode = "Toggle",
+    Callback = function(v) infiniteJumpEnabled = v; NextUI.Options.InfJump:Set(v); updateHUD() end})
+KeysCard:AddKeybind({Title = "Noclip", Flag = "NoclipKeybind", Mode = "Toggle",
+    Callback = function(v) noclipEnabled = v; NextUI.Options.NoclipEnabled:Set(v); updateHUD() end})
+KeysCard:AddKeybind({Title = "Follow Target", Flag = "FollowKeybind", Mode = "Toggle",
+    Callback = function(v) followEnabled = v; NextUI.Options.FollowEnabled:Set(v); updateHUD() end})
 
 
 -- ======== INFINITE JUMP ========
@@ -1034,7 +861,7 @@ RunService.RenderStepped:Connect(function(dt)
         if char and hrp and hum and hum.Health > 0 and hasBomb() then
             if not Players:FindFirstChild(followTarget.Name) then
                 followTarget = nil; followEnabled = false
-                Toggles.FollowEnabled:SetValue(false); updateHUD()
+                NextUI.Options.FollowEnabled:Set(false); updateHUD()
             else
                 local tc = followTarget.Character
                 if tc then
