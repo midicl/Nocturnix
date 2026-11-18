@@ -98,8 +98,7 @@ local auraType            = "None"
 local wingsStyle          = "None"
 local haloEnabled         = false; local haloAngle = 0; local haloObj = nil
 local instantRespawn      = false
-local arFOV  = nil
-local arMode = "16:9"
+local arMode = "Off"
 
 
 -- ======== LIGHTING SAVE ========
@@ -152,28 +151,74 @@ local TRAIL_COLORS = {
     ["White"]  = {C3(255,255,255), C3(180,180,180)},
 }
 
+-- ======== VFX PACK ========
+local _packLoaded = false
+local _packTexIds = {}
+local _packCallbacks = {}
+
+task.spawn(function()
+    local ok, m = pcall(function()
+        return game:GetService("InsertService"):LoadAsset(18221073047)
+    end)
+    if not (ok and m) then return end
+    for _, v in ipairs(m:GetDescendants()) do
+        local id
+        if     v:IsA("ParticleEmitter") then id = v.Texture
+        elseif v:IsA("Decal")           then id = v.Texture
+        elseif v:IsA("Texture")         then id = v.Texture
+        end
+        if id and id ~= "" and id ~= "rbxassetid://0" then
+            local dup = false
+            for _, x in ipairs(_packTexIds) do if x == id then dup = true; break end end
+            if not dup then _packTexIds[#_packTexIds+1] = id end
+        end
+    end
+    _packLoaded = #_packTexIds > 0
+    m:Destroy()
+    if _packLoaded then
+        for _, cb in ipairs(_packCallbacks) do pcall(cb) end
+        pcall(function() NextUI:Success("VFX Pack", "Loaded " .. #_packTexIds .. " textures", 3) end)
+    end
+end)
+
+-- cycles through pack textures by offset index
+local function packTex(i)
+    if not _packLoaded or #_packTexIds == 0 then return nil end
+    return _packTexIds[((i or 1) - 1) % #_packTexIds + 1]
+end
+
 -- ======== HELPERS ========
 local function hasBomb()
     local c = LP.Character
-    return c and (c:FindFirstChild("bomb") or c:FindFirstChild("Bomb")) ~= nil
+    if not c then return false end
+    for _, v in ipairs(c:GetChildren()) do
+        if v:IsA("Tool") then
+            local low = v.Name:lower()
+            if low:find("bomb") or low:find("timer") or low:find("time") then return true end
+        end
+    end
+    return false
 end
 local function isOnLadder(hum) return hum:GetState() == Enum.HumanoidStateType.Climbing end
 
 -- ======== ASPECT RATIO ========
-local AR_TARGETS = { ["21:9"]=21/9, ["4:3"]=4/3, ["2.35:1"]=2.35, ["1:1"]=1 }
+local AR_RATIOS = { ["4:3"]=4/3, ["16:9"]=16/9, ["16:10"]=16/10, ["21:9"]=21/9, ["1:1"]=1 }
+local _arOrigVP = workspace.CurrentCamera.ViewportSize
+local _setres = rawget(_G, "setresolution")
+    or (rawget(_G,"syn") and type(rawget(_G,"syn"))=="table" and rawget(rawget(_G,"syn"),"setresolution"))
+    or rawget(_G, "set_resolution") or rawget(_G, "setwindowsize") or rawget(_G, "set_window_size")
 local function setAspectRatio(r)
     arMode = r
-    if r == "16:9" then
-        arFOV = nil
-        if not fovEnabled then workspace.CurrentCamera.FieldOfView = 70 end
+    local origW = math.floor(_arOrigVP.X)
+    local origH = math.floor(_arOrigVP.Y)
+    if r == "Off" then
+        if _setres then pcall(_setres, origW, origH) end
         return
     end
-    local target = AR_TARGETS[r]; if not target then return end
-    local vp = workspace.CurrentCamera.ViewportSize
-    local sa = vp.X / vp.Y
-    local base = fovEnabled and customFOV or 70
-    local hFOV = 2 * math.atan(math.tan(math.rad(base / 2)) * target)
-    arFOV = math.deg(2 * math.atan(math.tan(hFOV / 2) / sa))
+    local ratio = AR_RATIOS[r]; if not ratio then return end
+    if not _setres then return end
+    local newW = math.floor(origH * ratio)
+    pcall(_setres, newW, origH)
 end
 
 -- ======== SHADER ========
@@ -206,6 +251,7 @@ local function setRain(on, rate)
     part.CastShadow = false; part.Transparency = 1; part.Parent = workspace
     rainObj = part
     local em = Instance.new("ParticleEmitter", part); em.Name = "_RainFX"
+    local rTex = packTex(4); if rTex then em.Texture = rTex end
     em.Color = CS{CSK.new(0,C3(180,205,235)), CSK.new(1,C3(150,180,215))}
     em.Transparency = NS{NSK.new(0,0.15), NSK.new(0.85,0.15), NSK.new(1,1)}
     em.Size = NS(0.025); em.Speed = NR(100,130); em.Rate = rate or 1500; em.Lifetime = NR(0.6,1)
@@ -306,12 +352,18 @@ local function applyTrails(on)
         t.Color = CS{CSK.new(0,cols[1]), CSK.new(1,cols[2])}
         t.Transparency = NS{NSK.new(0,0), NSK.new(0.5,0.25), NSK.new(1,1)}
         t.WidthScale = NS{NSK.new(0,1), NSK.new(1,0)}
+        local tex = packTex(1)
+        if tex then t.Texture = tex; t.TextureLength = 1; t.TextureMode = Enum.TextureMode.Stretch end
     end
 end
 
 -- ======== AURA SYSTEM ========
+local _mkFXCount = 0
 local function mkFX(parent, t)
+    _mkFXCount = _mkFXCount + 1
     local em = Instance.new("ParticleEmitter", parent); em:SetAttribute("_AuraFX", true)
+    -- Use pack texture by offset, or explicit override, or default sparkle
+    em.Texture = t.tex or packTex(_mkFXCount) or "rbxassetid://6880950593"
     if t.color  then em.Color      = t.color  end
     if t.size   then em.Size       = t.size   end
     if t.trans  then em.Transparency = t.trans end
@@ -460,6 +512,31 @@ AURAS["Neon Rainbow"] = function(char, hrp)
         spread=V2(180,180),le=1})
 end
 
+-- Register pack callback: adds "VFX 1", "VFX 2", ... aura entries once pack loads
+_packCallbacks[#_packCallbacks+1] = function()
+    for i, texId in ipairs(_packTexIds) do
+        local n = "VFX " .. i; local tid = texId
+        AURAS[n] = function(char, hrp)
+            mkHL(char, C3(255,255,255), C3(220,220,255), 0.85, 0.2)
+            local att = mkAtt(hrp, V3(0,-1,0))
+            mkFX(att, {tex=tid, size=NS{NSK.new(0,V2(0,0)),NSK.new(0.2,V2(1.5,1.5)),NSK.new(1,V2(0,0))},
+                le=1,li=0,spd=NR(2,6),rate=35,life=NR(1,2.5),spread=V2(60,60)})
+            mkFX(att, {tex=tid, size=NS{NSK.new(0,V2(0,0)),NSK.new(0.3,V2(2,2)),NSK.new(1,V2(0,0))},
+                le=0.8,li=0,spd=NR(5,12),rate=20,life=NR(0.8,1.5),spread=V2(45,45)})
+        end
+    end
+    pcall(function()
+        local vals = {"None"}
+        for n in next, AURAS do vals[#vals+1] = n end
+        table.sort(vals)
+        local opt = NextUI.Options and NextUI.Options.AuraStyle
+        if opt then
+            if type(opt.SetValues)   == "function" then opt:SetValues(vals)
+            elseif type(opt.SetOptions) == "function" then opt:SetOptions(vals) end
+        end
+    end)
+end
+
 local function applyAura(char, name)
     if not char or not char.Parent then return end
     clearAura(char)
@@ -496,6 +573,8 @@ local function applyWings(char, style)
             b.Width0 = cfg.w[i]; b.Width1 = 0
             b.FaceCamera = true; b.LightEmission = 1; b.LightInfluence = 0
             b.Segments = 20; b.TextureLength = 2
+            local wTex = packTex(2)
+            if wTex then b.Texture = wTex; b.TextureMode = Enum.TextureMode.Wrap end
             b.Transparency = NS{NSK.new(0,0), NSK.new(0.85,0.3), NSK.new(1,1)}
         end
     end
@@ -688,11 +767,11 @@ local VisTab = Window:AddTab("Visuals", "eye")
 
 local CamCard = VisTab:AddSection({Title = "Camera", Icon = "camera"})
 CamCard:AddToggle({Title = "Custom FOV", Flag = "FOVEnabled", Default = false,
-    Callback = function(v) fovEnabled = v; if not v and not arFOV then workspace.CurrentCamera.FieldOfView = 70 end end})
+    Callback = function(v) fovEnabled = v; if not v then workspace.CurrentCamera.FieldOfView = 70 end end})
 CamCard:AddSlider({Title = "Field of View", Flag = "FOVValue", Default = 70, Min = 30, Max = 120, Suffix = "°",
     Callback = function(v) customFOV = v; if fovEnabled then workspace.CurrentCamera.FieldOfView = v end end})
-CamCard:AddDropdown({Title = "Aspect Ratio", Flag = "AspectRatio", Default = "16:9",
-    Values = {"16:9","21:9","4:3","2.35:1","1:1"},
+CamCard:AddDropdown({Title = "Aspect Ratio", Flag = "AspectRatio", Default = "Off",
+    Values = {"Off","4:3","16:9","16:10","21:9","1:1"},
     Callback = function(v) setAspectRatio(v) end})
 CamCard:AddDropdown({Title = "Shader", Flag = "ShaderPreset", Default = "None",
     Values = {"None","Cinematic","Vibrant","Dark Film","Neon Glow","Warm Sunset","Cold Blue","Depth"},
@@ -765,18 +844,35 @@ ConfCard:AddConfigManager()
 
 local KeysSub = SettTab:AddSubTab("Keys", "keyboard")
 local KeysCard = KeysSub:AddSection({Title = "Keybinds", Icon = "keyboard"})
-KeysCard:AddKeybind({Title = "Speed Boost", Flag = "SpeedKeybind", Mode = "Toggle",
-    Callback = function(v) regularSpeedEnabled = v; NextUI.Options.SpeedEnabled:Set(v); updateHUD() end})
-KeysCard:AddKeybind({Title = "Bomb Speed", Flag = "BombSpeedKeybind", Mode = "Toggle",
-    Callback = function(v) bombSpeedEnabled = v; NextUI.Options.BombSpeedEnabled:Set(v); updateHUD() end})
-KeysCard:AddKeybind({Title = "Spin Bot", Flag = "SpinKeybind", Mode = "Toggle",
-    Callback = function(v) spinEnabled = v; NextUI.Options.SpinEnabled:Set(v); updateHUD() end})
-KeysCard:AddKeybind({Title = "Infinite Jump", Flag = "InfJumpKeybind", Mode = "Toggle",
-    Callback = function(v) infiniteJumpEnabled = v; NextUI.Options.InfJump:Set(v); updateHUD() end})
-KeysCard:AddKeybind({Title = "Noclip", Flag = "NoclipKeybind", Mode = "Toggle",
-    Callback = function(v) noclipEnabled = v; NextUI.Options.NoclipEnabled:Set(v); updateHUD() end})
-KeysCard:AddKeybind({Title = "Follow Target", Flag = "FollowKeybind", Mode = "Toggle",
-    Callback = function(v) followEnabled = v; NextUI.Options.FollowEnabled:Set(v); updateHUD() end})
+KeysCard:AddKeybind({Title = "Speed Boost",   Flag = "SpeedKeybind",     Mode = "Toggle", Callback = function() end})
+KeysCard:AddKeybind({Title = "Bomb Speed",    Flag = "BombSpeedKeybind", Mode = "Toggle", Callback = function() end})
+KeysCard:AddKeybind({Title = "Spin Bot",      Flag = "SpinKeybind",      Mode = "Toggle", Callback = function() end})
+KeysCard:AddKeybind({Title = "Infinite Jump", Flag = "InfJumpKeybind",   Mode = "Toggle", Callback = function() end})
+KeysCard:AddKeybind({Title = "Noclip",        Flag = "NoclipKeybind",    Mode = "Toggle", Callback = function() end})
+KeysCard:AddKeybind({Title = "Follow Target", Flag = "FollowKeybind",    Mode = "Toggle", Callback = function() end})
+
+-- ======== KEYBIND HANDLER ========
+-- Checks every keybind flag on each keypress so multiple features
+-- bound to the same key both fire correctly.
+local _KB_ACTIONS = {
+    {flag="SpeedKeybind",     fn=function() regularSpeedEnabled=not regularSpeedEnabled; NextUI.Options.SpeedEnabled:Set(regularSpeedEnabled); updateHUD() end},
+    {flag="BombSpeedKeybind", fn=function() bombSpeedEnabled=not bombSpeedEnabled; NextUI.Options.BombSpeedEnabled:Set(bombSpeedEnabled); updateHUD() end},
+    {flag="SpinKeybind",      fn=function() spinEnabled=not spinEnabled; NextUI.Options.SpinEnabled:Set(spinEnabled); updateHUD() end},
+    {flag="InfJumpKeybind",   fn=function() infiniteJumpEnabled=not infiniteJumpEnabled; NextUI.Options.InfJump:Set(infiniteJumpEnabled); updateHUD() end},
+    {flag="NoclipKeybind",    fn=function() noclipEnabled=not noclipEnabled; NextUI.Options.NoclipEnabled:Set(noclipEnabled); updateHUD() end},
+    {flag="FollowKeybind",    fn=function() followEnabled=not followEnabled; NextUI.Options.FollowEnabled:Set(followEnabled); updateHUD() end},
+}
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    local kn = input.KeyCode.Name
+    for _, kb in ipairs(_KB_ACTIONS) do
+        local bound = NextUI.Flags[kb.flag]
+        if bound then
+            local bs = tostring(bound)
+            if bs == kn or bs == "Enum.KeyCode."..kn then kb.fn() end
+        end
+    end
+end)
 
 
 -- ======== INFINITE JUMP ========
@@ -798,11 +894,10 @@ RunService.Heartbeat:Connect(function()
     if hum then
         local frozen = frozenCheckEnabled and hrp and (hrp.Anchored or hum.PlatformStand)
         if not frozen then
-            if hasBomb() then
-                hum.WalkSpeed = bombSpeedEnabled and bombSpeed or 16
-            else
-                hum.WalkSpeed = regularSpeedEnabled and regularSpeed or 16
-            end
+            local spd = 16
+            if regularSpeedEnabled then spd = regularSpeed end
+            if bombSpeedEnabled and hasBomb() then spd = bombSpeed end
+            hum.WalkSpeed = spd
         end
     end
 
@@ -825,9 +920,7 @@ end)
 -- ======== RENDER STEPPED ========
 RunService.RenderStepped:Connect(function(dt)
     -- FOV
-    if arFOV then
-        workspace.CurrentCamera.FieldOfView = arFOV
-    elseif fovEnabled then
+    if fovEnabled then
         workspace.CurrentCamera.FieldOfView = customFOV
     end
 
