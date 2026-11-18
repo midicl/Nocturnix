@@ -886,18 +886,23 @@ UIS.JumpRequest:Connect(function()
 end)
 
 -- ======== HEARTBEAT ========
-RunService.Heartbeat:Connect(function()
+RunService.Heartbeat:Connect(function(dt)
     local c = LP.Character
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     local hum = c and c:FindFirstChildOfClass("Humanoid")
 
-    if hum then
-        local frozen = frozenCheckEnabled and hrp and (hrp.Anchored or hum.PlatformStand)
+    if hum and hrp then
+        local frozen = frozenCheckEnabled and (hrp.Anchored or hum.PlatformStand)
         if not frozen then
-            local spd = 16
+            local spd = 0
             if regularSpeedEnabled then spd = regularSpeed end
             if bombSpeedEnabled and hasBomb() then spd = bombSpeed end
-            hum.WalkSpeed = spd
+            if spd > 0 then
+                local dir = hum.MoveDirection
+                if dir.Magnitude > 0 then
+                    hrp.CFrame = hrp.CFrame + dir * spd * dt
+                end
+            end
         end
     end
 
