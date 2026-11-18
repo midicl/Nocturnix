@@ -100,50 +100,12 @@ local haloEnabled         = false; local haloAngle = 0; local haloObj = nil
 local instantRespawn      = false
 local arFOVMult           = 1.0
 
--- ======== SILENT AIM STATE ========
-local sa = {
-    Enabled    = false,
-    FovRadius  = 150,
-    Prediction = 0.12,
-    WallCheck  = true,
-    TeamCheck  = false,
-    HitPart    = "HumanoidRootPart",
-}
-local mb1Down = false
-local saTarget   = nil   -- current locked target part (hookmetamethod SA)
-
 local rb = {
     Enabled   = false,
     Delay     = 0.1,
     DoubleTap = false,
 }
 local rbLastFire = 0
-
--- cycle resolver: tries each Y-angle offset per shot until one registers a hit
-local rbCycle = {
-    Enabled  = false,
-    offsets  = {0, 45, -45, 90, -90, 135, -135, 180},
-    idx      = 1,
-    prevHP   = nil,
-    locked   = nil,    -- offset that last landed a hit
-    lockedPl = nil,
-}
-local rbCycleOffset = 0  -- active offset (degrees) fed into hookmetamethod
-
-local saTargetPlayer = nil
-
--- ======== FAKE LAG STATE ========
-local flEnabled    = false
-local flGhostCF    = nil   -- frozen server position
-local flRealCF     = nil   -- restored local position
-local flUpdateRate = 0.0   -- seconds between ghost updates (0 = fully frozen)
-local flLastUpdate = 0
-
-local FovCircle = Drawing.new("Circle")
-FovCircle.Color    = Color3.fromRGB(165, 95, 255)
-FovCircle.Thickness = 1
-FovCircle.Filled   = false
-FovCircle.Visible  = false
 
 
 -- ======== LIGHTING SAVE ========
@@ -764,7 +726,7 @@ CombatBot:AddToggle("InstantRespawn", {
 local CombatRage = CombatLeft:AddTab("Rage")
 CombatRage:AddToggle("RBEnabled", {
     Text = "Rage Bot", Default = false,
-    Tooltip = "Auto-fires at Silent Aim target. Requires Silent Aim to be on.",
+    Tooltip = "Rate-limited auto-fire at cursor position",
     Callback = function(v) rb.Enabled = v end
 })
 CombatRage:AddSlider("RBDelay", {
@@ -777,54 +739,7 @@ CombatRage:AddToggle("RBDoubleTap", {
     Tooltip = "Fires twice per activation — bypasses some server-side cooldowns",
     Callback = function(v) rb.DoubleTap = v end
 })
-CombatRage:AddToggle("RBCycleEnabled", {
-    Text = "Cycle Resolver", Default = false,
-    Tooltip = "Rotates aim offset each shot (0°→45°→-45°→90°…) until a hit registers, then locks that angle",
-    Callback = function(v)
-        rbCycle.Enabled = v
-        if not v then rbCycleOffset = 0; rbCycle.locked = nil end
-    end
-})
 
-local CombatSA = CombatRight:AddTab("Silent Aim")
-CombatSA:AddToggle("SAEnabled", {
-    Text = "Silent Aim", Default = false,
-    Tooltip = "Hooks Mouse.Hit — bullets fly to nearest target in FOV automatically",
-    Callback = function(v)
-        sa.Enabled = v
-        FovCircle.Visible = v
-    end
-})
-CombatSA:AddSlider("SAFov", {
-    Text = "FOV Radius", Default = 150, Min = 10, Max = 500, Rounding = 5,
-    Suffix = "px",
-    Callback = function(v) sa.FovRadius = v end
-})
-CombatSA:AddSlider("SAPrediction", {
-    Text = "Prediction", Default = 12, Min = 0, Max = 50, Rounding = 1,
-    Suffix = "%",
-    Callback = function(v) sa.Prediction = v / 100 end
-})
-CombatSA:AddToggle("SAWallCheck", {
-    Text = "Wall Check", Default = true,
-    Tooltip = "Skip targets behind walls",
-    Callback = function(v) sa.WallCheck = v end
-})
-CombatSA:AddToggle("SATeamCheck", {
-    Text = "Team Check", Default = false,
-    Tooltip = "Skip teammates",
-    Callback = function(v) sa.TeamCheck = v end
-})
-CombatSA:AddDropdown("SAHitPart", {
-    Text = "Target Part", Default = "HumanoidRootPart",
-    Values = {"HumanoidRootPart", "Head", "UpperTorso", "Torso"},
-    Multi = false,
-    Callback = function(v) sa.HitPart = v end
-})
-CombatSA:AddLabel("FOV Circle Color"):AddColorPicker("SAFovColor", {
-    Default = Color3.fromRGB(165, 95, 255),
-    Callback = function(v) FovCircle.Color = v end
-})
 
 local CombatFollow = CombatRight:AddTab("Follow")
 local playerOpts = {}
@@ -860,28 +775,6 @@ CombatFollow:AddButton({
     end
 })
 
--- Fake Lag subtab (CombatLeft)
-local CombatFL = CombatLeft:AddTab("Fake Lag")
-CombatFL:AddToggle("FLEnabled", {
-    Text = "Fake Lag", Default = false,
-    Tooltip = "Others see you frozen, you move freely — hitbox stays on your real position",
-    Callback = function(v)
-        flEnabled = v
-        if v then
-            local c2 = LP.Character
-            local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-            if h2 then flGhostCF = h2.CFrame; flLastUpdate = tick() end
-        else
-            flGhostCF = nil; flRealCF = nil
-        end
-    end
-})
-CombatFL:AddSlider("FLUpdateRate", {
-    Text = "Ghost Drift Speed", Default = 0, Min = 0, Max = 2, Rounding = 2,
-    Suffix = "s",
-    Tooltip = "0 = fully frozen ghost, higher = ghost slowly drifts toward real position (looks like jitter lag)",
-    Callback = function(v) flUpdateRate = v end
-})
 
 -- ======== CHARACTER TAB ========
 local CharLeft  = Tabs.Char:AddLeftTabbox()
@@ -1098,31 +991,15 @@ KeyBox:AddKeybind("FollowKeybind", {
         updateHUD()
     end
 })
-KeyBox:AddKeybind("FLKeybind", {
-    Text = "Fake Lag", Default = "None", Mode = "Toggle",
-    Callback = function()
-        flEnabled = not flEnabled
-        Toggles.FLEnabled:SetValue(flEnabled)
-        if flEnabled then
-            local c2 = LP.Character
-            local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-            if h2 then flGhostCF = h2.CFrame; flLastUpdate = tick() end
-        else
-            flGhostCF = nil; flRealCF = nil
-        end
-    end
-})
 
 
 -- ======== INFINITE JUMP + MB1 TRACKING ========
 UIS.InputBegan:Connect(function(inp, gpe)
     if gpe then return end
     if inp.KeyCode == Enum.KeyCode.Space then jumpHeld = true end
-    if inp.UserInputType == Enum.UserInputType.MouseButton1 then mb1Down = true end
 end)
 UIS.InputEnded:Connect(function(inp)
     if inp.KeyCode == Enum.KeyCode.Space then jumpHeld = false end
-    if inp.UserInputType == Enum.UserInputType.MouseButton1 then mb1Down = false end
 end)
 UIS.JumpRequest:Connect(function()
     if not infiniteJumpEnabled then return end
@@ -1154,34 +1031,6 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- ======== FAKE LAG (Heartbeat desync) ========
--- Heartbeat fires after physics; task.defer restores real position before next render.
--- Server replication reads the ghost CFrame; local display sees the real CFrame.
-RunService.Heartbeat:Connect(function()
-    if not flEnabled or not flGhostCF then return end
-    local char2 = LP.Character; if not char2 then return end
-    local hrp2 = char2:FindFirstChild("HumanoidRootPart"); if not hrp2 then return end
-
-    flRealCF = hrp2.CFrame
-
-    -- optionally drift ghost toward real so it looks like jitter lag, not full freeze
-    if flUpdateRate > 0 then
-        local now = tick()
-        if now - flLastUpdate >= flUpdateRate then
-            flGhostCF  = flRealCF
-            flLastUpdate = now
-        end
-    end
-
-    hrp2.CFrame = flGhostCF  -- push ghost → what server replication reads
-
-    task.defer(function()    -- fires after Heartbeat, before next RenderStepped
-        if not flEnabled or not flRealCF then return end
-        local c3 = LP.Character; if not c3 then return end
-        local h3 = c3:FindFirstChild("HumanoidRootPart"); if not h3 then return end
-        h3.CFrame = flRealCF  -- restore real → what local render + hitbox see
-    end)
-end)
 
 -- ======== RENDER STEPPED ========
 RunService.RenderStepped:Connect(function(dt)
@@ -1252,106 +1101,19 @@ RunService.RenderStepped:Connect(function(dt)
         if newCF ~= hrp.CFrame then hrp.CFrame = newCF end
     until true
 
-    -- target selection for hookmetamethod silent aim + ragebot
-    do
-        local vp2 = Camera.ViewportSize
-        local sc2 = Vector2.new(vp2.X / 2, vp2.Y / 2)
-        FovCircle.Position = sc2
-        FovCircle.Radius   = sa.FovRadius
-        FovCircle.Visible  = sa.Enabled
-        if sa.Enabled then
-            local char2 = LP.Character
-            local saP   = RaycastParams.new()
-            saP.FilterType = Enum.RaycastFilterType.Exclude
-            if char2 then saP.FilterDescendantsInstances = { char2 } end
-            local best, bestPl, bestD = nil, nil, math.huge
-            for _, pl in ipairs(Players:GetPlayers()) do
-                repeat
-                    if pl == LP then break end
-                    if sa.TeamCheck and pl.Team == LP.Team then break end
-                    local pc = pl.Character; if not pc then break end
-                    local tgt = pc:FindFirstChild(sa.HitPart) or pc:FindFirstChild("HumanoidRootPart")
-                    if not tgt then break end
-                    local h2 = pc:FindFirstChildOfClass("Humanoid")
-                    if not h2 or h2.Health <= 0 then break end
-                    local sp, dp = Camera:WorldToViewportPoint(tgt.Position)
-                    if dp <= 0 then break end
-                    local sd = (sc2 - Vector2.new(sp.X, sp.Y)).Magnitude
-                    if sd > sa.FovRadius then break end
-                    if sa.WallCheck then
-                        local res = workspace:Raycast(Camera.CFrame.Position, tgt.Position - Camera.CFrame.Position, saP)
-                        if not res or not res.Instance:IsDescendantOf(pc) then break end
-                    end
-                    if sd < bestD then bestD = sd; best = tgt; bestPl = pl end
-                until true
+    -- ragebot (fires at cursor)
+    if rb.Enabled then
+        local now = tick()
+        if now - rbLastFire >= rb.Delay then
+            local function doFire()
+                local ok = pcall(mouse1click)
+                if not ok then pcall(mouse1press); task.defer(function() pcall(mouse1release) end) end
             end
-            saTarget = best; saTargetPlayer = bestPl
-            -- ragebot: auto-fire at locked target with cycle resolver
-            if rb.Enabled and saTarget then
-                local now = tick()
-                if now - rbLastFire >= rb.Delay then
-                    -- cycle resolver: detect hit and rotate offset
-                    if rbCycle.Enabled then
-                        local hum3 = saTargetPlayer and saTargetPlayer.Character and saTargetPlayer.Character:FindFirstChildOfClass("Humanoid")
-                        local curHP = hum3 and hum3.Health
-                        if rbCycle.lockedPl ~= saTargetPlayer then
-                            -- new target — reset cycle
-                            rbCycle.lockedPl = saTargetPlayer
-                            rbCycle.locked   = nil
-                            rbCycle.idx      = 1
-                            rbCycle.prevHP   = curHP
-                        else
-                            if rbCycle.prevHP and curHP and curHP < rbCycle.prevHP then
-                                rbCycle.locked = rbCycle.offsets[rbCycle.idx]  -- hit, lock it
-                            elseif not rbCycle.locked then
-                                rbCycle.idx = (rbCycle.idx % #rbCycle.offsets) + 1  -- miss, next angle
-                            end
-                            rbCycle.prevHP = curHP
-                        end
-                        rbCycleOffset = rbCycle.locked or rbCycle.offsets[rbCycle.idx]
-                    else
-                        rbCycleOffset = 0
-                    end
-                    -- Use Da Hood's native shoot handler via simulated mouse click
-                    -- mouse1click() triggers MouseButton1Down which reads our hooked Mouse.Hit
-                    local function doFire()
-                        local ok = pcall(mouse1click)
-                        if not ok then
-                            -- some executors split press/release
-                            pcall(mouse1press)
-                            task.defer(function() pcall(mouse1release) end)
-                        end
-                    end
-                    doFire()
-                    if rb.DoubleTap then task.defer(doFire) end
-                    rbLastFire = now
-                end
-            end
-        else
-            saTarget = nil; saTargetPlayer = nil
+            doFire()
+            if rb.DoubleTap then task.defer(doFire) end
+            rbLastFire = now
         end
     end
 
 end)
 
--- ======== SILENT AIM (hookmetamethod Mouse.Hit/Target intercept) ========
--- Intercepts Mouse.Hit/Target so bullets fly to saTarget regardless of aim
-local __indexHook
-pcall(function()
-    __indexHook = hookmetamethod(game, "__index", function(t, k)
-        if t:IsA("Mouse") and sa.Enabled and saTarget then
-            if k == "Hit" then
-                local pos = saTarget.Position + (saTarget.Velocity * sa.Prediction)
-                -- apply cycle resolver angular offset
-                if rb.Enabled and rbCycle.Enabled and rbCycleOffset ~= 0 then
-                    local r = 0.5
-                    pos = pos + Vector3.new(math.cos(math.rad(rbCycleOffset)) * r, 0, math.sin(math.rad(rbCycleOffset)) * r)
-                end
-                return CFrame.new(pos)
-            elseif k == "Target" then
-                return saTarget
-            end
-        end
-        return __indexHook(t, k)
-    end)
-end)
