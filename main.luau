@@ -85,7 +85,7 @@ local regularSpeedEnabled = false; local regularSpeed = 20
 local bombSpeedEnabled    = false; local bombSpeed    = 25
 local spinEnabled         = false; local spinAngle    = 0
 local ladderCheckEnabled  = true;  local frozenCheckEnabled = true
-local infiniteJumpEnabled = false; local jumpHeld     = false
+local infiniteJumpEnabled = false
 local noclipEnabled       = false
 local followEnabled       = false; local followTarget = nil; local followDist = 3
 local headlessEnabled     = false; local korbloxEnabled = false
@@ -98,14 +98,8 @@ local auraType            = "None"
 local wingsStyle          = "None"
 local haloEnabled         = false; local haloAngle = 0; local haloObj = nil
 local instantRespawn      = false
-local arFOVMult           = 1.0
-
-local rb = {
-    Enabled   = false,
-    Delay     = 0.1,
-    DoubleTap = false,
-}
-local rbLastFire = 0
+local arFOV  = nil
+local arMode = "16:9"
 
 
 -- ======== LIGHTING SAVE ========
@@ -165,39 +159,21 @@ local function hasBomb()
 end
 local function isOnLadder(hum) return hum:GetState() == Enum.HumanoidStateType.Climbing end
 
--- ======== ASPECT RATIO BARS ========
-local arGui = Instance.new("ScreenGui")
-arGui.Name = "TB_AR"; arGui.ResetOnSpawn = false
-arGui.DisplayOrder = 60; arGui.IgnoreGuiInset = true
-pcall(function() arGui.Parent = CoreGui end)
-if not arGui.Parent then arGui.Parent = LP.PlayerGui end
-local function mkBar(n)
-    local f = Instance.new("Frame", arGui)
-    f.Name = n; f.BackgroundColor3 = Color3.new(0,0,0); f.BorderSizePixel = 0; f.Size = UDim2.new(0,0,0,0)
-    return f
-end
-local arT = mkBar("T"); local arB = mkBar("B"); local arL = mkBar("L"); local arR = mkBar("R")
-
+-- ======== ASPECT RATIO ========
+local AR_TARGETS = { ["21:9"]=21/9, ["4:3"]=4/3, ["2.35:1"]=2.35, ["1:1"]=1 }
 local function setAspectRatio(r)
-    for _, b in ipairs({arT, arB, arL, arR}) do b.Size = UDim2.new(0,0,0,0) end
-    arFOVMult = 1.0
-    if r == "21:9" then
-        arT.Size = UDim2.new(1,0,0.119,0); arT.Position = UDim2.new(0,0,0,0)
-        arB.Size = UDim2.new(1,0,0.119,0); arB.Position = UDim2.new(0,0,0.881,0)
-        arFOVMult = 0.762
-    elseif r == "4:3" then
-        arL.Size = UDim2.new(0.125,0,1,0); arL.Position = UDim2.new(0,0,0,0)
-        arR.Size = UDim2.new(0.125,0,1,0); arR.Position = UDim2.new(0.875,0,0,0)
-    elseif r == "2.35:1" then
-        arT.Size = UDim2.new(1,0,0.121,0); arT.Position = UDim2.new(0,0,0,0)
-        arB.Size = UDim2.new(1,0,0.121,0); arB.Position = UDim2.new(0,0,0.879,0)
-        arFOVMult = 0.758
-    elseif r == "1:1" then
-        arL.Size = UDim2.new(0.219,0,1,0); arL.Position = UDim2.new(0,0,0,0)
-        arR.Size = UDim2.new(0.219,0,1,0); arR.Position = UDim2.new(0.781,0,0,0)
-    else
+    arMode = r
+    if r == "16:9" then
+        arFOV = nil
         if not fovEnabled then workspace.CurrentCamera.FieldOfView = 70 end
+        return
     end
+    local target = AR_TARGETS[r]; if not target then return end
+    local vp = workspace.CurrentCamera.ViewportSize
+    local sa = vp.X / vp.Y
+    local base = fovEnabled and customFOV or 70
+    local hFOV = 2 * math.atan(math.tan(math.rad(base / 2)) * target)
+    arFOV = math.deg(2 * math.atan(math.tan(hFOV / 2) / sa))
 end
 
 -- ======== SHADER ========
@@ -723,23 +699,6 @@ CombatBot:AddToggle("InstantRespawn", {
     end
 })
 
-local CombatRage = CombatLeft:AddTab("Rage")
-CombatRage:AddToggle("RBEnabled", {
-    Text = "Rage Bot", Default = false,
-    Tooltip = "Rate-limited auto-fire at cursor position",
-    Callback = function(v) rb.Enabled = v end
-})
-CombatRage:AddSlider("RBDelay", {
-    Text = "Fire Rate", Default = 10, Min = 1, Max = 20, Rounding = 1,
-    Suffix = "×/s",
-    Callback = function(v) rb.Delay = 1 / v end
-})
-CombatRage:AddToggle("RBDoubleTap", {
-    Text = "Double Tap", Default = false,
-    Tooltip = "Fires twice per activation — bypasses some server-side cooldowns",
-    Callback = function(v) rb.DoubleTap = v end
-})
-
 
 local CombatFollow = CombatRight:AddTab("Follow")
 local playerOpts = {}
@@ -993,14 +952,7 @@ KeyBox:AddKeybind("FollowKeybind", {
 })
 
 
--- ======== INFINITE JUMP + MB1 TRACKING ========
-UIS.InputBegan:Connect(function(inp, gpe)
-    if gpe then return end
-    if inp.KeyCode == Enum.KeyCode.Space then jumpHeld = true end
-end)
-UIS.InputEnded:Connect(function(inp)
-    if inp.KeyCode == Enum.KeyCode.Space then jumpHeld = false end
-end)
+-- ======== INFINITE JUMP ========
 UIS.JumpRequest:Connect(function()
     if not infiniteJumpEnabled then return end
     local c = LP.Character; if not c then return end
@@ -1012,21 +964,32 @@ end)
 
 -- ======== HEARTBEAT ========
 RunService.Heartbeat:Connect(function()
-    if infiniteJumpEnabled and jumpHeld then
-        local c = LP.Character; if c then
-            local hum = c:FindFirstChild("Humanoid")
-            if hum and hum:GetState() == Enum.HumanoidStateType.Freefall then
-                if hum.JumpPower == 0  then hum.JumpPower = 50  end
-                if hum.JumpHeight == 0 then hum.JumpHeight = 7.2 end
-                hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    local c = LP.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+
+    if hum then
+        local frozen = frozenCheckEnabled and hrp and (hrp.Anchored or hum.PlatformStand)
+        if not frozen then
+            if hasBomb() then
+                hum.WalkSpeed = bombSpeedEnabled and bombSpeed or 16
+            else
+                hum.WalkSpeed = regularSpeedEnabled and regularSpeed or 16
             end
         end
     end
-    if noclipEnabled then
-        local c = LP.Character; if c then
-            for _, p in ipairs(c:GetDescendants()) do
-                if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then p.CanCollide = false end
-            end
+
+    if infiniteJumpEnabled and hum and UIS:IsKeyDown(Enum.KeyCode.Space) then
+        if hum:GetState() == Enum.HumanoidStateType.Freefall then
+            if hum.JumpPower == 0  then hum.JumpPower = 50  end
+            if hum.JumpHeight == 0 then hum.JumpHeight = 7.2 end
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+
+    if noclipEnabled and c then
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
         end
     end
 end)
@@ -1035,13 +998,10 @@ end)
 -- ======== RENDER STEPPED ========
 RunService.RenderStepped:Connect(function(dt)
     -- FOV
-    if fovEnabled or arFOVMult ~= 1.0 then
-        local base = fovEnabled and customFOV or 70
-        if arFOVMult == 1.0 then
-            workspace.CurrentCamera.FieldOfView = base
-        else
-            workspace.CurrentCamera.FieldOfView = math.deg(2 * math.atan(math.tan(math.rad(base / 2)) * arFOVMult))
-        end
+    if arFOV then
+        workspace.CurrentCamera.FieldOfView = arFOV
+    elseif fovEnabled then
+        workspace.CurrentCamera.FieldOfView = customFOV
     end
 
     -- Halo spin
@@ -1056,15 +1016,22 @@ RunService.RenderStepped:Connect(function(dt)
         end
     end
 
-    -- Movement
-    local char = LP.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChild("Humanoid")
-    repeat
-        if not char then break end
-        if not hrp or not hum or hum.Health <= 0 then break end
+    -- Spinbot
+    if spinEnabled then
+        local char = LP.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            spinAngle = (spinAngle + 20 * dt) % (2 * math.pi)
+            hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, spinAngle, 0)
+        end
+    end
 
-        if followEnabled and followTarget and hasBomb() then
+    -- Follow
+    if followEnabled and followTarget then
+        local char = LP.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChild("Humanoid")
+        if char and hrp and hum and hum.Health > 0 and hasBomb() then
             if not Players:FindFirstChild(followTarget.Name) then
                 followTarget = nil; followEnabled = false
                 Toggles.FollowEnabled:SetValue(false); updateHUD()
@@ -1074,46 +1041,10 @@ RunService.RenderStepped:Connect(function(dt)
                     local tHRP = tc:FindFirstChild("HumanoidRootPart")
                     if tHRP and (tHRP.Position - hrp.Position).Magnitude <= 300 then
                         hrp.CFrame = tHRP.CFrame * CFrame.new(0, 0, followDist)
-                        break
                     end
                 end
             end
         end
-
-        if frozenCheckEnabled then
-            if hrp.Anchored then break end
-            if hum.PlatformStand then break end
-            local frozenSkip = false
-            for _, v in ipairs(hrp:GetChildren()) do
-                if v:IsA("BodyPosition") or v:IsA("BodyVelocity") then frozenSkip = true; break end
-            end
-            if frozenSkip then break end
-        end
-        if ladderCheckEnabled and isOnLadder(hum) then break end
-
-        local dir = hum.MoveDirection; local speed = 0
-        if hasBomb() then if bombSpeedEnabled then speed = bombSpeed end
-        elseif regularSpeedEnabled then speed = regularSpeed end
-
-        local newCF = hrp.CFrame
-        if speed > 0 and dir.Magnitude > 0 then newCF = newCF + dir * speed * dt end
-        if spinEnabled then spinAngle = (spinAngle + 20 * dt) % (2 * math.pi); newCF = CFrame.new(newCF.Position) * CFrame.Angles(0, spinAngle, 0) end
-        if newCF ~= hrp.CFrame then hrp.CFrame = newCF end
-    until true
-
-    -- ragebot (fires at cursor)
-    if rb.Enabled then
-        local now = tick()
-        if now - rbLastFire >= rb.Delay then
-            local function doFire()
-                local ok = pcall(mouse1click)
-                if not ok then pcall(mouse1press); task.defer(function() pcall(mouse1release) end) end
-            end
-            doFire()
-            if rb.DoubleTap then task.defer(doFire) end
-            rbLastFire = now
-        end
     end
-
 end)
 
